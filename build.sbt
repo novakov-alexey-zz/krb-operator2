@@ -13,6 +13,7 @@ lazy val root = (project in file("."))
       kubernetesClient,
       circeExtra,
       circeCore,
+      logbackClassic,
       scalaTest % Test
     )
   )

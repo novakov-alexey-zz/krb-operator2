@@ -1,4 +1,4 @@
-package freya
+package krboperator
 
 sealed trait Password
 final case class Static(value: String) extends Password

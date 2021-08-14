@@ -1,16 +1,21 @@
-package freya
+package krboperator
 
 import cats.effect.Sync
+import cats.syntax.all.catsSyntaxApply
 import com.goyeau.kubernetes.client.crd.CustomResource
-import freya.Controller.NewStatus
+import krboperator.Controller.{NewStatus, noStatus}
+import org.typelevel.log4cats.Logger
 
 object KrbPrincipalController {
 
-  implicit def instance[F[_]: Sync]: Controller[F, Principals, PrincipalsStatus] =
+  implicit def instance[F[_]: Logger](implicit
+      F: Sync[F]
+  ): Controller[F, Principals, PrincipalsStatus] =
     new Controller[F, Principals, PrincipalsStatus]() {
       override def onAdd(
           resource: CustomResource[Principals, PrincipalsStatus]
-      ): F[NewStatus[PrincipalsStatus]] = super.onAdd(resource)
+      ): F[NewStatus[PrincipalsStatus]] = Logger[F]
+        .info(s"received on add: $resource") *> noStatus[F, PrincipalsStatus]
 
       override def onModify(
           resource: CustomResource[Principals, PrincipalsStatus]

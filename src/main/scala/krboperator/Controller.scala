@@ -1,9 +1,9 @@
-package freya
+package krboperator
 
 import cats.effect.Sync
 import cats.syntax.all.catsSyntaxApply
 import com.goyeau.kubernetes.client.crd.CustomResource
-import freya.Controller.{NewStatus, NoStatus, noStatus}
+import krboperator.Controller.{NewStatus, NoStatus, noStatus}
 
 import scala.language.implicitConversions
 

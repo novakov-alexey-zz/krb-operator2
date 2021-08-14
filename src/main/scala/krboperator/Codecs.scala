@@ -1,4 +1,4 @@
-package freya
+package krboperator
 
 import cats.syntax.functor._
 import io.circe.Decoder
