@@ -15,7 +15,7 @@ object KrbPrincipalController {
       override def onAdd(
           resource: CustomResource[Principals, PrincipalsStatus]
       ): F[NewStatus[PrincipalsStatus]] = Logger[F]
-        .info(s"received on add: $resource") *> noStatus[F, PrincipalsStatus]
+        .info(s"received on add: $resource") *> noStatus
 
       override def onModify(
           resource: CustomResource[Principals, PrincipalsStatus]

@@ -16,7 +16,7 @@ object KrbServerController {
           resource: CustomResource[KrbServer, KrbServerStatus]
       ): F[NewStatus[KrbServerStatus]] =
         Logger[F]
-          .info(s"received on add: $resource") *> noStatus[F, KrbServerStatus]
+          .info(s"received on add: $resource") *> noStatus
 
       override def onModify(
           resource: CustomResource[KrbServer, KrbServerStatus]

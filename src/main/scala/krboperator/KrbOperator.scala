@@ -15,7 +15,7 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
 import java.io.File
 import scala.reflect.ClassTag
 
-object TestApp extends IOApp with Codecs {
+object KrbOperator extends IOApp with Codecs {
   implicit def unsafeLogger[F[_]: Sync]: Logger[F] = Slf4jLogger.getLogger[F]
 
   val kubernetesClient: Resource[IO, KubernetesClient[IO]] =
@@ -25,7 +25,8 @@ object TestApp extends IOApp with Codecs {
       )
     )
 
-  val group = "krb-operator.novakov-alexey.github.io"
+  val group =
+    "krb-operator.novakov-alexey.github.io" //TODO: extract to configuration
 
   override def run(args: List[String]): IO[ExitCode] = {
     implicit lazy val serverController = KrbServerController.instance[IO]
@@ -33,11 +34,9 @@ object TestApp extends IOApp with Codecs {
 
     kubernetesClient
       .use { client =>
-        val serverStream = watchCr[IO, KrbServer, KrbServerStatus](client)
-        val principalsStream =
-          watchCr[IO, Principals, PrincipalsStatus](client)
-
-        Stream(serverStream, principalsStream).parJoinUnbounded.compile.drain
+        val server = watchCr[IO, KrbServer, KrbServerStatus](client)
+        val principals = watchCr[IO, Principals, PrincipalsStatus](client)
+        Stream(server, principals).parJoinUnbounded.compile.drain
       }
       .as(ExitCode.Success)
   }
@@ -51,7 +50,11 @@ object TestApp extends IOApp with Codecs {
   ) = {
     val kind = implicitly[ClassTag[Resource]].runtimeClass.getSimpleName
     val plural = s"${kind.toLowerCase}s"
-    val context = CrdContext(group, "v1", plural)
+    val context = CrdContext(
+      group,
+      "v1",
+      plural
+    ) //TODO: version to extract to configuration
     Stream.eval(
       Logger[F].info(s"Watching context: $context")
     ) >> kubernetesClient
