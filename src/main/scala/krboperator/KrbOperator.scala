@@ -9,6 +9,7 @@ import fs2.{Pipe, Stream}
 import io.circe.generic.extras.auto._
 import io.circe.{Decoder, Encoder}
 import krboperator.Controller.NewStatus
+import krboperator.service.{Kadmin, Secrets}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
@@ -28,12 +29,19 @@ object KrbOperator extends IOApp with Codecs {
   val group =
     "krb-operator.novakov-alexey.github.io" //TODO: extract to configuration
 
+  val operatorCfg =
+    AppConfig.load.fold(e => sys.error(s"failed to load config: $e"), identity)
+
   override def run(args: List[String]): IO[ExitCode] = {
-    implicit lazy val serverController = KrbServerController.instance[IO]
-    implicit lazy val principalController = KrbPrincipalController.instance[IO]
+    implicit lazy val serverController = ServerController.instance[IO]
 
     kubernetesClient
       .use { client =>
+        val secrets = new Secrets[IO](client, operatorCfg)
+        val kadmin = new Kadmin[IO](client, operatorCfg)
+        implicit lazy val principalController =
+          new PrincipalController[IO](secrets, kadmin, client)
+
         val server = watchCr[IO, KrbServer, KrbServerStatus](client)
         val principals = watchCr[IO, Principals, PrincipalsStatus](client)
         Stream(server, principals).parJoinUnbounded.compile.drain

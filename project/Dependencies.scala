@@ -12,4 +12,12 @@ object Dependencies {
 
   lazy val logbackClassic =
     "ch.qos.logback" % "logback-classic" % "1.3.0-alpha9"
+
+  val pureConfigVersion = "0.16.0"
+  lazy val pureConfig =
+    "com.github.pureconfig" %% "pureconfig" % pureConfigVersion
+
+  val betterMonadicVersion = "0.3.1"
+  lazy val betterMonadicFor =
+    "com.olegpy" %% "better-monadic-for" % betterMonadicVersion
 }

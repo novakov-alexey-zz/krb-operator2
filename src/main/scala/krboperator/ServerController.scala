@@ -6,7 +6,7 @@ import com.goyeau.kubernetes.client.crd.CustomResource
 import krboperator.Controller.{NewStatus, noStatus}
 import org.typelevel.log4cats.Logger
 
-object KrbServerController {
+object ServerController {
 
   implicit def instance[F[_]: Logger](implicit
       F: Sync[F]

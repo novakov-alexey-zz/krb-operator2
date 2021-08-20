@@ -9,10 +9,12 @@ ThisBuild / organizationName := "krb-operator2"
 lazy val root = (project in file("."))
   .settings(
     name := "krb-operator2",
+    addCompilerPlugin(betterMonadicFor),
     libraryDependencies ++= Seq(
       kubernetesClient,
       circeExtra,
       circeCore,
+      pureConfig,
       logbackClassic,
       scalaTest % Test
     )
