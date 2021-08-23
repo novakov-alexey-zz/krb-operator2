@@ -33,7 +33,6 @@ trait WaitUtils {
       delay: FiniteDuration = defaultDelay
   )(action: F[(Boolean, Option[S])])(implicit
       F: Async[F],
-      T: Temporal[F],
       logger: Logger[F]
   ): F[(Boolean, Option[S])] = {
     val debug = LoggingUtils.logDebugWithNamespace(logger)
@@ -45,18 +44,17 @@ trait WaitUtils {
       action.flatMap {
         case (true, state) => (true, state).pure[F]
         case (false, state) if spent < waitTime =>
-          F.whenA(spent.toMillis != 0 && spent.toMillis % 5000 == 0) {
-            peek(state) *> F.delay(
-              debug(
-                namespace,
-                s"Already spent time: ${spent.toSeconds} secs / $waitTime"
-              )
+          F.whenA(spent.toMillis != 0 && spent.toSeconds % 5 == 0) {
+            peek(state) *> debug(
+              namespace,
+              s"Already spent time: ${spent.toSeconds} secs / $waitTime"
             )
-          } *> T.sleep(delay) *> loop(spent + delay, waitTime)
+          } *> F.sleep(delay) *> loop(spent + delay, waitTime)
         case (_, state) =>
-          F.delay(
-            debug(namespace, s"Was waiting for ${spent.toMinutes} mins")
-          ) *> (true, state).pure[F]
+          debug(namespace, s"Was waiting for ${spent.toMinutes} mins") *> (
+            true,
+            state
+          ).pure[F]
       }
 
     loop(0.millisecond, waitTime)

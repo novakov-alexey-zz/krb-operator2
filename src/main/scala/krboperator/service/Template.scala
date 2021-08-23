@@ -18,6 +18,17 @@ import org.typelevel.log4cats.Logger
 import krboperator.LoggingUtils
 import krboperator.KrbOperatorCfg
 import Template._
+import io.k8s.api.core.v1.ServiceSpec
+import io.k8s.api.core.v1.ServicePort
+import io.k8s.api.core.v1.PodTemplateSpec
+import com.goyeau.kubernetes.client.IntOrString
+import com.goyeau.kubernetes.client.IntValue
+import ServiceUtils._
+import io.k8s.api.apps.v1.DeploymentSpec
+import io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
+import io.k8s.api.core.v1.PodSpec
+import io.k8s.api.core.v1.Container
+import io.k8s.api.core.v1.EnvVar
 
 object Template {
   val PrefixParam = "PREFIX"
@@ -40,7 +51,7 @@ trait DeploymentResourceAlg[F[_]] {
 
   def createOrReplace(
       client: KubernetesClient[F],
-      is: ByteArrayInputStream,
+      deployment: Deployment,
       meta: ObjectMeta
   ): F[Deployment]
 
@@ -70,20 +81,20 @@ class DeploymentResource[F[_]](implicit F: Sync[F])
 
   override def createOrReplace(
       client: KubernetesClient[F],
-      is: ByteArrayInputStream,
+      deployment: Deployment,
       meta: ObjectMeta
   ): F[Deployment] = {
-    val dc: Deployment = ??? //TODO: client.deployments.load(is)
-
     client.deployments
       .namespace(meta.namespace.get)
-      .createOrUpdate(dc)
+      .createOrUpdate(deployment)
       .flatMap { s =>
         s match {
-          case Status.Ok => F.pure(dc)
+          case Status.Ok => F.pure(deployment)
           case _ =>
             F.raiseError(
-              new RuntimeException(s"failed to create resource $dc, status $s")
+              new RuntimeException(
+                s"failed to create resource $deployment, status: $s"
+              )
             )
         }
       }
@@ -120,20 +131,103 @@ class Template[F[_], T](
     Map(PrefixParam -> cfg.k8sResourcesPrefix, AdminPwdParam -> randomPassword)
   )
 
-  private def deploymentSpec(kdcName: String, krbRealm: String) = replaceParams(
-    Paths.get(cfg.k8sSpecsDir, resource.deploymentSpecName),
-    Map(
-      KdcServerParam -> kdcName,
-      KrbRealmParam -> krbRealm,
-      Krb5Image -> cfg.krb5Image,
-      PrefixParam -> cfg.k8sResourcesPrefix
+  private def deploymentSpec(kdcName: String, krbRealm: String): Deployment =
+    Deployment(
+      metadata = Some(
+        ObjectMeta(
+          name = Some(kdcName)
+        )
+      ),
+      spec = Some(
+        DeploymentSpec(
+          replicas = Some(1),
+          selector = LabelSelector(
+            matchLabels = Some(Map("deployment" -> kdcName))
+          ),
+          template = PodTemplateSpec(
+            metadata = Some(
+              ObjectMeta(
+                labels = Some(Map("deployment" -> kdcName))
+              )
+            ),
+            spec = Some(
+              PodSpec(
+                containers = Seq(
+                  Container(
+                    image = Some(cfg.krb5Image),
+                    imagePullPolicy = Some("Always"),
+                    name = "kadmin",
+                    env = Some(
+                      Seq(
+                        EnvVar("RUN_MODE", Some("kadmin")),
+                        EnvVar("KRB5_KDC", Some(kdcName)),
+                        EnvVar("KRB5_REALM", Some(krbRealm))
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
     )
-  )
+  // replaceParams(
+  //   Paths.get(cfg.k8sSpecsDir, resource.deploymentSpecName),
+  //   Map(
+  //     KdcServerParam -> kdcName,
+  //     KrbRealmParam -> krbRealm,
+  //     Krb5Image -> cfg.krb5Image,
+  //     PrefixParam -> cfg.k8sResourcesPrefix
+  //   )
+  // )
 
-  private def serviceSpec(kdcName: String) =
-    replaceParams(
-      Paths.get(cfg.k8sSpecsDir, "krb5-service.yaml"),
-      Map(KdcServerParam -> kdcName)
+  private def serviceSpec(kdcName: String): Service =
+    Service(
+      metadata = Some(ObjectMeta(name = Some(kdcName))),
+      spec = Some(
+        ServiceSpec(
+          ports = Some(
+            Seq(
+              ServicePort(
+                name = Some("kerberos-kdc-tcp"),
+                port = 88,
+                protocol = Some("TCP"),
+                targetPort = Some(IntValue(8888))
+              ),
+              ServicePort(
+                name = Some("kerberos-kdc"),
+                port = 88,
+                protocol = Some("UDP"),
+                targetPort = Some(IntValue(8888))
+              ),
+              ServicePort(
+                name = Some("kpasswd"),
+                port = 464,
+                protocol = Some("UDP"),
+                targetPort = Some(IntValue(8464))
+              ),
+              ServicePort(
+                name = Some("kadmin"),
+                port = 749,
+                protocol = Some("UDP"),
+                targetPort = Some(IntValue(8749))
+              ),
+              ServicePort(
+                name = Some("kadmin-tcp"),
+                port = 749,
+                protocol = Some("TCP"),
+                targetPort = Some(IntValue(8749))
+              )
+            )
+          ),
+          selector = Some(
+            Map("deployment" -> kdcName)
+          ),
+          sessionAffinity = None,
+          `type` = Some("ClusterIP")
+        )
+      )
     )
 
   private def replaceParams(
@@ -215,17 +309,24 @@ class Template[F[_], T](
       .handleError(_ => None)
 
   def createService(meta: ObjectMeta): F[Unit] =
-    F.delay {
-      val is = new ByteArrayInputStream(serviceSpec(meta.name.get).getBytes())
-      val s: Service = ??? //TODO: client.services.load(is).get()
-      client.services.namespace(meta.namespace.get).createOrUpdate(s)
-    }.void
-      .recoverWith { case e =>
-        for {
-          missing <- findService(meta).map(_.isEmpty)
-          error <- F.whenA(missing)(F.raiseError(e))
-        } yield error
-      }
+    for {
+      name <- F.fromOption(
+        meta.name,
+        new RuntimeException("Metadata name is emnty!")
+      )
+      ns <- getNamespace(meta)
+      s = serviceSpec(name)
+      _ <- client.services
+        .namespace(ns)
+        .createOrUpdate(s)
+        .void
+        .recoverWith { case e =>
+          for {
+            missing <- findService(meta).map(_.isEmpty)
+            error <- F.whenA(missing)(F.raiseError(e))
+          } yield error
+        }
+    } yield ()
 
   def createDeployment(meta: ObjectMeta, realm: String): F[Unit] =
     debug(
@@ -233,8 +334,7 @@ class Template[F[_], T](
       s"Creating new deployment for KDC: ${meta.name}"
     ) *>
       F.delay {
-        val content = deploymentSpec(meta.name.get, realm)
-        val is = new ByteArrayInputStream(content.getBytes)
-        resource.createOrReplace(client, is, meta)
+        val spec = deploymentSpec(meta.name.get, realm)
+        resource.createOrReplace(client, spec, meta)
       }
 }

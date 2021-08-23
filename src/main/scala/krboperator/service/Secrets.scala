@@ -16,9 +16,10 @@ import krboperator.KrbOperatorCfg
 import krboperator.LoggingUtils
 import Secrets._
 import krboperator.KeytabAndPassword
+import ServiceUtils._
 
 object Secrets {
-  val principalSecretLabel: Map[String, String] = Map("app" -> "krb")
+  val principalSecretLabel = Map("app" -> "krb")
 }
 
 class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
@@ -26,17 +27,22 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
     val logger: Logger[F]
 ) extends LoggingUtils[F] {
 
-  def getAdminPwd(meta: ObjectMeta): F[String] =
-    client.secrets
-      .namespace(meta.namespace.get)
-      .get(cfg.adminPwd.secretName)
-      .map(Option(_))
+  def getAdminPwd(meta: ObjectMeta): F[String] = {
+    val maybeSecret = for {
+      ns <- getNamespace(meta)
+      secret <- client.secrets
+        .namespace(ns)
+        .get(cfg.adminPwd.secretName)
+        .map(s => Option(s) -> ns)
+    } yield secret
+
+    maybeSecret
       .flatMap {
-        case Some(s) =>
-          val pwd = s.data.flatMap(_.get(cfg.adminPwd.secretKey))
+        case (Some(secret), ns) =>
+          val pwd = secret.data.flatMap(_.get(cfg.adminPwd.secretKey))
           pwd match {
             case Some(p) =>
-              info(meta.namespace.get, s"Found admin password for $meta") *> F
+              info(ns, s"Found admin password for $meta") *> F
                 .pure(new String(Base64.getDecoder.decode(p)))
             case None =>
               F.raiseError[String](
@@ -45,16 +51,17 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
                 )
               )
           }
-        case None =>
+        case (None, ns) =>
           F.raiseError[String](
             new RuntimeException(
-              s"Failed to find a secret '${cfg.adminPwd.secretName}'"
+              s"Failed to find a secret '${cfg.adminPwd.secretName}' in namespace $ns"
             )
           )
       }
       .onError { case t: Throwable =>
         error(meta.namespace.get, "Failed to get an admin password", t)
       }
+  }
 
   def create(
       namespace: String,
@@ -67,7 +74,7 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
         namespace,
         s"Creating secret for [${keytabs.mkString(",")}] keytabs"
       )
-      val builder = Secret(
+      val secretBase = Secret(
         metadata = Some(
           ObjectMeta(
             name = Some(secretName),
@@ -80,7 +87,7 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       )
 
       val secret = principals
-        .foldLeft(builder) { case (acc, principals) =>
+        .foldLeft(secretBase) { case (acc, principals) =>
           val bytes = Files.readAllBytes(principals.keytabMeta.path)
           acc.copy(data =
             acc.data.map(
@@ -98,7 +105,7 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
             })
 
           credentialsWithPassword
-            .foldLeft(builder) { case (acc, c) =>
+            .foldLeft(secretBase) { case (acc, c) =>
               acc.copy(data =
                 acc.data.map(
                   _ ++ Map(
@@ -120,31 +127,36 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
   def findMissing(
       meta: ObjectMeta,
       expectedSecrets: Set[String]
-  ): F[Set[String]] = {
-    debug(
-      meta.namespace.get,
+  ): F[Set[String]] = for {
+    ns <- getNamespace(meta)
+    _ <- debug(
+      ns,
       s"Expected secrets to find: ${expectedSecrets.mkString(",")}"
-    ) *> client.secrets
-      .namespace(meta.namespace.get)
+    )
+    missing <- client.secrets
+      .namespace(ns)
       .list(principalSecretLabel)
       .map(Some(_))
       .flatMap {
-        case Some(l) =>
-          val foundSecrets = l.items
-            .map(_.metadata.flatMap(_.name).get)
+        case Some(secretList) =>
+          val foundSecrets = secretList.items
+            .flatMap(_.metadata.flatMap(_.name))
             .toSet
           F.pure(expectedSecrets -- foundSecrets)
         case _ =>
           F.pure(expectedSecrets)
       }
-  }
+  } yield missing
 
   def findAdminSecret(meta: ObjectMeta): F[Option[Secret]] =
-    client.secrets
-      .namespace(meta.namespace.get)
-      .get(cfg.adminPwd.secretName)
-      .map(Option(_))
-      .handleError(_ => None)
+    for {
+      ns <- getNamespace(meta)
+      secret <- client.secrets
+        .namespace(ns)
+        .get(cfg.adminPwd.secretName)
+        .map(Option(_))
+        .handleError(_ => None)
+    } yield secret
 
   def createAdminSecret(meta: ObjectMeta, adminPwd: String): F[Unit] = {
     val secretName = cfg.k8sResourcesPrefix + "-krb-admin-pwd"
@@ -154,7 +166,10 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       ),
       data = Some(Map("krb5_pass" -> adminPwd))
     )
-    client.secrets.namespace(meta.namespace.get).createOrUpdate(secret).void
-  }
 
+    for {
+      ns <- getNamespace(meta)
+      _ <- client.secrets.namespace(ns).createOrUpdate(secret).void
+    } yield ()
+  }
 }

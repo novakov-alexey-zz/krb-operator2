@@ -16,6 +16,7 @@ import io.k8s.api.core.v1.Pod
 import com.goyeau.kubernetes.client.KubernetesClient
 import org.typelevel.log4cats.Logger
 import krboperator.KeytabAndPassword
+import ServiceUtils._
 
 final case class Credentials(
     username: String,
@@ -45,24 +46,22 @@ object Kadmin {
   val ExecInPodTimeout: FiniteDuration = 60.seconds
 }
 
-trait KeytabPathAlg {
+trait KeytabPathGen {
   def keytabToPath(prefix: String, name: String): String
 }
 
-object KeytabPathAlg {
-  implicit val pathGen: KeytabPathAlg = new KeytabPathGenerator
-}
-
-class KeytabPathGenerator extends KeytabPathAlg {
-  def keytabToPath(prefix: String, name: String): String =
-    s"/tmp/$prefix/$name"
+object KeytabPathGen {
+  implicit val pathGen: KeytabPathGen = new KeytabPathGen {
+    def keytabToPath(prefix: String, name: String): String =
+      s"/tmp/$prefix/$name"
+  }
 }
 
 class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
     F: Async[F],
     T: Temporal[F],
     pods: PodsAlg[F],
-    pathGen: KeytabPathAlg,
+    pathGen: KeytabPathGen,
     val logger: Logger[F]
 ) extends WaitUtils
     with LoggingUtils[F] {
@@ -75,34 +74,34 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       context: KadminContext
   ): F[KerberosState] =
     (for {
+      namespace <- getNamespace(context.meta)
       pod <- waitForPod(context)
       podName = pod.metadata.get.name.get
 
       principals <- F.defer {
         val groupedByKeytab = principals.groupBy(_.keytab)
-        val keytabsOrErrors = groupedByKeytab.toList.map {
-          case (keytab, principals) =>
-            val path = Paths.get(pathGen.keytabToPath(randomString, keytab))
-            for {
-              _ <- createWorkingDir(
-                context.meta.namespace.get,
-                podName,
-                path.getParent
-              )
-              credentials = principals.map(p =>
-                Credentials(p.name, getPassword(p.password), p.secret)
-              )
-              _ <- addKeytab(context, path, credentials, podName)
-            } yield PrincipalsWithKey(credentials, KeytabMeta(keytab, path))
+        val keytabs = groupedByKeytab.toList.map { case (keytab, principals) =>
+          val path = Paths.get(pathGen.keytabToPath(randomString, keytab))
+          for {
+            _ <- createWorkingDir(
+              namespace,
+              podName,
+              path.getParent
+            )
+            credentials = principals.map(p =>
+              Credentials(p.name, getPassword(p.password), p.secret)
+            )
+            _ <- addKeytab(context, path, credentials, podName)
+          } yield PrincipalsWithKey(credentials, KeytabMeta(keytab, path))
         }
-        keytabsOrErrors.sequence
+        keytabs.sequence
       }
     } yield {
-      debug(context.meta.namespace.get, s"principals created: $principals")
+      debug(namespace, s"principals created: $principals")
       KerberosState(podName, principals)
     }).adaptErr { case t =>
       new RuntimeException(
-        s"Failed to create principal and keytab via 'kadmin' CLI",
+        s"Failed to create Kerberos principal(s) and keytab(s) via 'kadmin' CLI",
         t
       )
     }
@@ -111,39 +110,39 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       context: KadminContext,
       duration: FiniteDuration = 1.minute
   ): F[Pod] = {
-    val labelKey = Template.DeploymentSelector
-    val labelValue = context.krbServerName
-    val namespace = context.meta.namespace.get
-    val previewPod: Option[Pod] => F[Unit] = pod =>
-      pod.fold(
-        debug(
-          namespace,
-          s"Pod with label '${labelKey}=${labelValue}'' is not available yet"
-        )
-      )(p =>
-        debug(
-          namespace,
-          s"Pod '${p.metadata.map(_.name)}'' is not ready"
-        )
-      )
-
-    pods
-      .waitForPod(client)(
-        context.meta,
-        previewPod,
-        F.delay(
-          pods.getPod(client)(namespace, labelKey, labelValue)
-        ),
-        duration
-      )
-      .flatMap(maybePod =>
-        F.fromOption(
-          maybePod,
-          new RuntimeException(
-            s"[${context.meta.namespace}] No 'Krb' POD found with label: ${Template.DeploymentSelector}=${context.krbServerName}"
+    val label = Template.DeploymentSelector -> context.krbServerName
+    val previewPod: String => Option[Pod] => F[Unit] = namespace =>
+      pod =>
+        pod.fold(
+          debug(
+            namespace,
+            s"Pod with label '$label' is not available yet"
+          )
+        )(p =>
+          debug(
+            namespace,
+            s"Pod '${p.metadata.map(_.name)}' is not yet ready"
           )
         )
-      )
+
+    for {
+      namespace <- getNamespace(context.meta)
+      pod <- pods
+        .waitForPod(client)(
+          context.meta,
+          previewPod(namespace),
+          pods.findPod(client)(namespace, label),
+          duration
+        )
+        .flatMap(maybePod =>
+          F.fromOption(
+            maybePod,
+            new RuntimeException(
+              s"[${context.meta.namespace}] No Pod found with label '$label'"
+            )
+          )
+        )
+    } yield pod
   }
 
   private def addKeytab(
@@ -151,44 +150,58 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       keytabPath: Path,
       credentials: List[Credentials],
       podName: String
-  ): F[Unit] = ???
-  // executeInKadmin(context.meta.namespace.get, podName) { exe =>
-  //   credentials.foldLeft(List.empty[ExecWatch]) { case (watchers, c) =>
-  //     watchers ++ List(
-  //       createPrincipal(context.realm, context.adminPwd, exe, c),
-  //       createKeytab(context.realm, context.adminPwd, exe, c, keytabPath)
-  //     )
-  //   }
-  // }
+  ): F[Unit] = {
+    val commands = credentials.map { cred =>
+      List(
+        createPrincipal(context.realm, context.adminPwd, cred),
+        createKeytab(context.realm, context.adminPwd, cred, keytabPath)
+      )
+    }
+
+    val res = for {
+      block <- commands
+      command <- block
+    } yield (for {
+      ns <- getNamespace(context.meta)
+      _ <- executeInKadmin(
+        ns,
+        podName,
+        command
+      )
+    } yield ()).adaptError { case e =>
+      new RuntimeException(
+        s"Failed to execute command = $command in $podName pod of ${context.meta.namespace} namepspace "
+      )
+    }
+
+    res.sequence_
+  }
 
   private def createWorkingDir(
       namespace: String,
       podName: String,
       keytabDir: Path
-  ): F[Unit] = ???
-  // executeInKadmin(namespace, podName) { execable =>
-  //   List(runCommand(List("mkdir", keytabDir.toString), execable))
-  // }
+  ): F[Unit] =
+    executeInKadmin(
+      namespace,
+      podName,
+      List("mkdir", keytabDir.toString)
+    )
 
   def removeWorkingDir(
       namespace: String,
       podName: String,
       keytab: Path
-  ): F[Unit] = ???
-  // executeInKadmin(namespace, podName) { execable =>
-  //   List(runCommand(List("rm", "-r", keytab.getParent.toString), execable))
-  // }
-
-  // private def runCommand(
-  //     cmd: List[String],
-  //     execable: Execable[String, ExecWatch]
-  // ): ExecWatch =
-  //   execable.exec(cmd: _*)
+  ): F[Unit] =
+    executeInKadmin(
+      namespace,
+      podName,
+      List("rm", "-r", keytab.getParent.toString)
+    )
 
   private def createKeytab(
       realm: String,
       adminPwd: String,
-      // exe: Execable[String, ExecWatch],
       credentials: Credentials,
       keytab: Path
   ) = {
@@ -202,21 +215,20 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       .replaceAll("\\$path", keytab.toString)
       .replaceAll("\\$username", credentials.username)
     val addKeytab = s"echo '$adminPwd' | $keytabCmd"
-    // runCommand(List("bash", "-c", addKeytab), exe)
+    List("bash", "-c", addKeytab)
   }
 
   private def createPrincipal(
       realm: String,
-      adminPwd: String,
-      // exe: Execable[String, ExecWatch],
+      adminPassword: String,
       cred: Credentials
   ) = {
     val addCmd = cfg.commands.addPrincipal
       .replaceAll("\\$realm", realm)
       .replaceAll("\\$username", cred.username)
       .replaceAll("\\$password", cred.password)
-    val addPrincipal = s"echo '$adminPwd' | $addCmd"
-    // runCommand(List("bash", "-c", addPrincipal), exe)
+    val addPrincipal = s"echo '$adminPassword' | $addCmd"
+    List("bash", "-c", addPrincipal)
   }
 
   private def getPassword(password: Password): String =
