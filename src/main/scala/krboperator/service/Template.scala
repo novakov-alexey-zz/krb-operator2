@@ -29,6 +29,13 @@ import io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
 import io.k8s.api.core.v1.PodSpec
 import io.k8s.api.core.v1.Container
 import io.k8s.api.core.v1.EnvVar
+import io.k8s.api.core.v1.Probe
+import io.k8s.api.core.v1.ExecAction
+import io.k8s.api.core.v1.ContainerPort
+import io.k8s.api.core.v1.VolumeMount
+import io.k8s.api.core.v1.Volume
+import io.k8s.api.core.v1.EmptyDirVolumeSource
+import io.k8s.api.core.v1.SecretVolumeSource
 
 object Template {
   val PrefixParam = "PREFIX"
@@ -55,9 +62,7 @@ trait DeploymentResourceAlg[F[_]] {
       meta: ObjectMeta
   ): F[Deployment]
 
-  def isDeploymentReady(resource: Deployment): F[Boolean]
-
-  val deploymentSpecName: String
+  def isDeploymentReady(resource: Deployment): F[Boolean]  
 }
 
 class DeploymentResource[F[_]](implicit F: Sync[F])
@@ -98,9 +103,7 @@ class DeploymentResource[F[_]](implicit F: Sync[F])
             )
         }
       }
-  }
-
-  override val deploymentSpecName: String = "krb5-deployment.yaml"
+  }  
 
   override def isDeploymentReady(resource: Deployment): F[Boolean] =
     ???
@@ -126,10 +129,10 @@ class Template[F[_], T](
 ) extends WaitUtils
     with LoggingUtils[F] {
 
-  val adminSecretSpec: String = replaceParams(
-    Paths.get(cfg.k8sSpecsDir, "krb5-admin-secret.yaml"),
-    Map(PrefixParam -> cfg.k8sResourcesPrefix, AdminPwdParam -> randomPassword)
-  )
+  // val adminSecretSpec: String = replaceParams(
+  //   Paths.get(cfg.k8sSpecsDir, "krb5-admin-secret.yaml"),
+  //   Map(PrefixParam -> cfg.k8sResourcesPrefix, AdminPwdParam -> randomPassword)
+  // )
 
   private def deploymentSpec(kdcName: String, krbRealm: String): Deployment =
     Deployment(
@@ -163,6 +166,119 @@ class Template[F[_], T](
                         EnvVar("KRB5_KDC", Some(kdcName)),
                         EnvVar("KRB5_REALM", Some(krbRealm))
                       )
+                    ),
+                    readinessProbe = Some(
+                      Probe(
+                        exec =
+                          Some(ExecAction(Some(Seq("ls", "/etc/krb5.conf")))),
+                        initialDelaySeconds = Some(10),
+                        periodSeconds = Some(5)
+                      )
+                    ),
+                    ports = Some(
+                      Seq(
+                        ContainerPort(
+                          containerPort = 8888,
+                          protocol = Some("TCP")
+                        ),
+                        ContainerPort(
+                          containerPort = 8888,
+                          protocol = Some("UDP")
+                        )
+                      )
+                    ),
+                    volumeMounts = Some(
+                      Seq(
+                        VolumeMount(
+                          mountPath = "/dev/shm",
+                          name = "share"
+                        )
+                      )
+                    )
+                  ),
+                  Container(
+                    image = Some(cfg.krb5Image),
+                    imagePullPolicy = Some("Always"),
+                    name = "kdc",
+                    env = Some(
+                      Seq(
+                        EnvVar("RUN_MODE", Some("kdc")),
+                        EnvVar("KRB5_KDC", Some(kdcName)),
+                        EnvVar("KRB5_REALM", Some(krbRealm))
+                      )
+                    ),
+                    readinessProbe = Some(
+                      Probe(
+                        exec =
+                          Some(ExecAction(Some(Seq("ls", "/etc/krb5.conf")))),
+                        initialDelaySeconds = Some(10),
+                        periodSeconds = Some(5)
+                      )
+                    ),
+                    ports = Some(
+                      Seq(
+                        ContainerPort(
+                          containerPort = 8749,
+                          protocol = Some("TCP")
+                        ),
+                        ContainerPort(
+                          containerPort = 8749,
+                          protocol = Some("UDP")
+                        ),
+                        ContainerPort(
+                          containerPort = 8464,
+                          protocol = Some("UDP")
+                        )
+                      )
+                    ),
+                    volumeMounts = Some(
+                      Seq(
+                        VolumeMount(
+                          mountPath = "/dev/shm",
+                          name = "share"
+                        ),
+                        VolumeMount(
+                          mountPath = "/var/kerberos/krb5kdc.d",
+                          name = "kdc-config"
+                        ),
+                        VolumeMount(
+                          mountPath = "/etc/krb.conf.d",
+                          name = "krb5-config"
+                        ),
+                        VolumeMount(
+                          mountPath = "/etc/krb5/secret/krb5_pass",
+                          subPath = Some("krb5_pass"),
+                          name = "admin-secret"
+                        )
+                      )
+                    )
+                  )
+                ),
+                dnsPolicy = Some("ClusterFirst"),
+                restartPolicy = Some("Always"),
+                terminationGracePeriodSeconds = Some(30),
+                volumes = Some(
+                  Seq(
+                    Volume(
+                      name = "share",
+                      emptyDir =
+                        Some(EmptyDirVolumeSource(medium = Some("share")))
+                    ),
+                    Volume(
+                      name = "kdc-config",
+                      emptyDir = Some(EmptyDirVolumeSource())
+                    ),
+                    Volume(
+                      name = "krb5-config",
+                      emptyDir = Some(EmptyDirVolumeSource())
+                    ),
+                    Volume(
+                      name = "admin-secret",
+                      secret = Some(
+                        SecretVolumeSource(secretName =
+                          Some(cfg.k8sResourcesPrefix + "-krb-admin-pwd")
+                        )
+                      )
                     )
                   )
                 )
@@ -172,15 +288,6 @@ class Template[F[_], T](
         )
       )
     )
-  // replaceParams(
-  //   Paths.get(cfg.k8sSpecsDir, resource.deploymentSpecName),
-  //   Map(
-  //     KdcServerParam -> kdcName,
-  //     KrbRealmParam -> krbRealm,
-  //     Krb5Image -> cfg.krb5Image,
-  //     PrefixParam -> cfg.k8sResourcesPrefix
-  //   )
-  // )
 
   private def serviceSpec(kdcName: String): Service =
     Service(
@@ -229,26 +336,6 @@ class Template[F[_], T](
         )
       )
     )
-
-  private def replaceParams(
-      pathToFile: Path,
-      params: Map[String, String]
-  ): String =
-    Using.resource(
-      Source
-        .fromFile(pathToFile.toFile)
-    ) {
-      _.getLines()
-        .map { l =>
-          params.view.foldLeft(l) { case (acc, (k, v)) =>
-            acc.replaceAll("\\$\\{" + k + "\\}", v)
-          }
-        }
-        .toList
-        .mkString("\n")
-    }
-
-  private def randomPassword = Random.alphanumeric.take(10).mkString
 
   def delete(meta: ObjectMeta): F[Unit] =
     (for {

@@ -17,6 +17,7 @@ import krboperator.LoggingUtils
 import Secrets._
 import krboperator.KeytabAndPassword
 import ServiceUtils._
+import scala.util.Random
 
 object Secrets {
   val principalSecretLabel = Map("app" -> "krb")
@@ -158,13 +159,15 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
         .handleError(_ => None)
     } yield secret
 
-  def createAdminSecret(meta: ObjectMeta, adminPwd: String): F[Unit] = {
+  private def randomPassword = Random.alphanumeric.take(10).mkString
+
+  def createAdminSecret(meta: ObjectMeta): F[Unit] = {
     val secretName = cfg.k8sResourcesPrefix + "-krb-admin-pwd"
     val secret = Secret(
       metadata = Some(
         ObjectMeta(name = Some(secretName))
       ),
-      data = Some(Map("krb5_pass" -> adminPwd))
+      data = Some(Map("krb5_pass" -> randomPassword))
     )
 
     for {
