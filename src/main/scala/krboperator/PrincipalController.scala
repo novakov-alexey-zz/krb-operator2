@@ -13,6 +13,7 @@ import PrincipalController._
 import java.nio.file.Path
 import com.goyeau.kubernetes.client.KubernetesClient
 import cats.Parallel
+import com.goyeau.kubernetes.client.crd.CustomResourceList
 
 object PrincipalController {
   val ServerLabel = "krb-operator.novakov-alexey.github.io/server"
@@ -22,6 +23,7 @@ class PrincipalController[F[_]: Parallel](
     secret: Secrets[F],
     kadmin: Kadmin[F],
     client: KubernetesClient[F],
+    serverController: ServerController[F],
     parallelSecret: Boolean = true
 )(implicit F: Sync[F], val logger: Logger[F])
     extends Controller[F, Principals, PrincipalsStatus]
@@ -30,25 +32,33 @@ class PrincipalController[F[_]: Parallel](
   override def onAdd(
       resource: CustomResource[Principals, PrincipalsStatus]
   ): F[NewStatus[PrincipalsStatus]] =
-    getMetadata(resource.metadata).flatMap(m => onApply(resource.spec, m))
+    onApply(resource.spec, resource.metadata)
 
   override def onModify(
       resource: CustomResource[Principals, PrincipalsStatus]
   ): F[NewStatus[PrincipalsStatus]] =
-    getMetadata(resource.metadata).flatMap(onApply(resource.spec, _))
+    onApply(resource.spec, resource.metadata)
 
   override def onDelete(
       resource: CustomResource[Principals, PrincipalsStatus]
   ): F[Unit] = super.onDelete(resource)
 
-  private def getMetadata(meta: Option[ObjectMeta]): F[ObjectMeta] =
-    F.fromOption(meta, new RuntimeException("Metadata is empty"))
+  private def getNamespace(meta: Option[ObjectMeta]): F[(ObjectMeta, String)] =
+    for {
+      meta <- F.fromOption(meta, new RuntimeException("Metadata is empty"))
+      ns <- F.fromOption(
+        meta.namespace,
+        new RuntimeException(s"Namespace is empty in $meta")
+      )
+
+    } yield (meta, ns)
 
   private def onApply(
       principals: Principals,
-      meta: ObjectMeta
+      maybeMeta: Option[ObjectMeta]
   ): F[NewStatus[PrincipalsStatus]] =
     for {
+      (meta, ns) <- getNamespace(maybeMeta)
       server <- getKrbServer(meta)
       missingSecrets <- secret.findMissing(
         meta,
@@ -57,17 +67,17 @@ class PrincipalController[F[_]: Parallel](
       created <- missingSecrets.toList match {
         case Nil =>
           debug(
-            meta.namespace.get,
+            ns,
             s"There are no missing secrets"
           ) *> F.pure(List.empty[Unit])
         case _ =>
           info(
-            meta.namespace.get,
+            ns,
             s" There are ${missingSecrets.size} missing secrets, name(s): $missingSecrets"
-          ) *> createSecrets(server, principals, meta, missingSecrets)
+          ) *> createSecrets(server, principals, meta, ns, missingSecrets)
       }
       _ <- F.whenA(created.nonEmpty)(
-        info(meta.namespace.get, s"${created.length} secrets created")
+        info(ns, s"${created.length} secrets created")
       )
     } yield PrincipalsStatus(
       processed = true,
@@ -76,7 +86,8 @@ class PrincipalController[F[_]: Parallel](
     ).some
 
   private def currentServers
-      : F[List[CustomResource[KrbServer, KrbServerStatus]]] = ??? //TODO
+      : F[List[CustomResource[KrbServer, KrbServerStatus]]] =
+    serverController.currentServers.map(_.items.toList)
 
   private[krboperator] def getKrbServer(
       meta: ObjectMeta
@@ -93,8 +104,8 @@ class PrincipalController[F[_]: Parallel](
     )
     servers <- currentServers
     serverOrError = servers
-      .find { r =>
-        r.metadata.exists(_.name.exists(_ == serverName))
+      .find { resource =>
+        resource.metadata.exists(_.name.exists(_ == serverName))
       }
       .map(_.asRight[Throwable])
       .getOrElse(
@@ -111,39 +122,45 @@ class PrincipalController[F[_]: Parallel](
       server: CustomResource[KrbServer, KrbServerStatus],
       principals: Principals,
       meta: ObjectMeta,
+      namespace: String,
       missingSecrets: Set[String]
   ): F[List[Unit]] =
     for {
       pwd <- secret.getAdminPwd(meta)
+      serverName <- F.fromOption(
+        server.metadata.flatMap(_.name),
+        new RuntimeException(
+          s"Server name is empty in customer resource metadata ${server.metadata}"
+        )
+      )
       context = KadminContext(
-        server.metadata.get.name.get,
+        serverName,
         server.spec.realm,
         meta,
         pwd
       )
       created <- {
-        lazy val ns = meta.namespace.get
         val tasks = missingSecrets
           .map(s => (s, principals.list.filter(_.secret.name == s)))
           .map { case (secretName, principals) =>
             for {
               _ <- debug(
-                ns,
+                namespace,
                 s"Creating secret: $secretName"
               )
               state <- kadmin.createPrincipalsAndKeytabs(principals, context)
-              statuses <- copyKeytabs(ns, state)
+              statuses <- copyKeytabs(namespace, state)
               _ <- checkStatuses(statuses)
-              _ <- secret.create(ns, state.principals, secretName)
+              _ <- secret.create(namespace, state.principals, secretName)
               _ <- info(
-                ns,
+                namespace,
                 s"$checkMark Keytab secret '$secretName' created"
               )
-              _ <- removeWorkingDirs(ns, state)
+              _ <- removeWorkingDirs(namespace, state)
                 .handleErrorWith { e =>
                   error(
-                    ns,
-                    s"Failed to delete working directory(s) with keytab(s) in POD $ns/${state.podName}",
+                    namespace,
+                    s"Failed to delete working directory(s) with keytab(s) in POD $namespace/${state.podName}",
                     e
                   )
                 }

@@ -161,18 +161,20 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
 
   private def randomPassword = Random.alphanumeric.take(10).mkString
 
-  def createAdminSecret(meta: ObjectMeta): F[Unit] = {
-    val secretName = cfg.k8sResourcesPrefix + "-krb-admin-pwd"
-    val secret = Secret(
+  private def secretSpec(name: String) =
+    Secret(
       metadata = Some(
-        ObjectMeta(name = Some(secretName))
+        ObjectMeta(name = Some(name))
       ),
       data = Some(Map("krb5_pass" -> randomPassword))
     )
 
+  def createAdminSecret(meta: ObjectMeta): F[Unit] = {
+    val secretName = cfg.k8sResourcesPrefix + "-krb-admin-pwd"
+    val secret = secretSpec(secretName)
     for {
       ns <- getNamespace(meta)
-      _ <- client.secrets.namespace(ns).createOrUpdate(secret).void
+      _ <- client.secrets.namespace(ns).createOrUpdate(secret)
     } yield ()
   }
 }

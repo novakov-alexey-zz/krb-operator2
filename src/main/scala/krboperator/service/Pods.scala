@@ -113,19 +113,15 @@ class Pods[F[_]](implicit F: Async[F], T: Temporal[F], val logger: Logger[F])
         } yield (ready, p)
       }
       _ <- F.whenA(ready)(
-        debug(ns, s"POD in namespace ${meta.namespace} is ready ")
+        debug(ns, s"POD in namespace ${meta.namespace} is ready")
       )
     } yield pod
 
   private def isPodReady(pod: Pod): Boolean =
-    pod.status
-      .flatMap(
-        _.conditions
-          .flatMap(
-            _.find(condition =>
-              condition.`type` == "Ready" && condition.status == "True"
-            )
-          )
-      )
-      .isDefined
+    (for {
+      status <- pod.status
+      conditions <- status.conditions
+      found = conditions
+        .exists(c => c.`type` == "Ready" && c.status == "True")
+    } yield found).getOrElse(false)
 }

@@ -37,17 +37,6 @@ import io.k8s.api.core.v1.Volume
 import io.k8s.api.core.v1.EmptyDirVolumeSource
 import io.k8s.api.core.v1.SecretVolumeSource
 
-object Template {
-  val PrefixParam = "PREFIX"
-  val AdminPwdParam = "ADMIN_PWD"
-  val KdcServerParam = "KDC_SERVER"
-  val KrbRealmParam = "KRB5_REALM"
-  val Krb5Image = "KRB5_IMAGE"
-  val DeploymentSelector = "deployment"
-
-  val deploymentTimeout: FiniteDuration = 1.minute
-}
-
 trait DeploymentResourceAlg[F[_]] {
   def delete(client: KubernetesClient[F], resource: Deployment): F[Boolean]
 
@@ -62,7 +51,7 @@ trait DeploymentResourceAlg[F[_]] {
       meta: ObjectMeta
   ): F[Deployment]
 
-  def isDeploymentReady(resource: Deployment): F[Boolean]  
+  def isDeploymentReady(resource: Deployment): Boolean
 }
 
 class DeploymentResource[F[_]](implicit F: Sync[F])
@@ -88,7 +77,7 @@ class DeploymentResource[F[_]](implicit F: Sync[F])
       client: KubernetesClient[F],
       deployment: Deployment,
       meta: ObjectMeta
-  ): F[Deployment] = {
+  ): F[Deployment] =
     client.deployments
       .namespace(meta.namespace.get)
       .createOrUpdate(deployment)
@@ -103,21 +92,37 @@ class DeploymentResource[F[_]](implicit F: Sync[F])
             )
         }
       }
-  }  
 
-  override def isDeploymentReady(resource: Deployment): F[Boolean] =
-    ???
-  //TODO: check fabric8 logic in Readiness.isDeploymentReady(resource)
+  override def isDeploymentReady(resource: Deployment): Boolean = {
+    val ready = for {
+      spec <- resource.spec
+      replicas <- spec.replicas
+      status <- resource.status
+      statusReplicas <- status.replicas
+      availableReplicas <- status.availableReplicas
+      ready = (replicas == statusReplicas && replicas <= availableReplicas)
+    } yield ready
+    ready.getOrElse(false)
+  }
 }
 
-object DeploymentResource {
+object Template {
+  val PrefixParam = "PREFIX"
+  val AdminPwdParam = "ADMIN_PWD"
+  val KdcServerParam = "KDC_SERVER"
+  val KrbRealmParam = "KRB5_REALM"
+  val Krb5Image = "KRB5_IMAGE"
+  val DeploymentSelector = "deployment"
 
-  implicit def k8sDeployment[F[_]: Sync]: DeploymentResource[F] =
-    new DeploymentResource[F]
+  val deploymentTimeout: FiniteDuration = 1.minute
 
+  object implicits {
+    implicit def k8sDeployment[F[_]: Sync]: DeploymentResourceAlg[F] =
+      new DeploymentResource[F]
+  }
 }
 
-class Template[F[_], T](
+class Template[F[_]](
     client: KubernetesClient[F],
     secrets: Secrets[F],
     cfg: KrbOperatorCfg
@@ -128,11 +133,6 @@ class Template[F[_], T](
     val logger: Logger[F]
 ) extends WaitUtils
     with LoggingUtils[F] {
-
-  // val adminSecretSpec: String = replaceParams(
-  //   Paths.get(cfg.k8sSpecsDir, "krb5-admin-secret.yaml"),
-  //   Map(PrefixParam -> cfg.k8sResourcesPrefix, AdminPwdParam -> randomPassword)
-  // )
 
   private def deploymentSpec(kdcName: String, krbRealm: String): Deployment =
     Deployment(
@@ -366,14 +366,14 @@ class Template[F[_], T](
       error(meta.namespace.get, "Failed to delete", e)
     }
 
-  def waitForDeployment(metadata: ObjectMeta): F[Unit] = {
+  def waitForDeployment(metadata: ObjectMeta): F[Unit] =
     info(
       metadata.namespace.get,
       s"Going to wait for deployment until ready: $deploymentTimeout"
     ) *>
       waitFor[F](metadata.namespace.get, deploymentTimeout) {
         findDeployment(metadata).flatMap { d =>
-          d.fold(F.pure(false))(resource.isDeploymentReady)
+          d.fold(false)(resource.isDeploymentReady).pure[F]
         }
       }.flatMap { ready =>
         if (ready)
@@ -383,7 +383,6 @@ class Template[F[_], T](
             new RuntimeException("Failed to wait for deployment readiness")
           )
       }
-  }
 
   def findDeployment(meta: ObjectMeta): F[Option[Deployment]] =
     resource.findDeployment(client, meta)
@@ -419,9 +418,8 @@ class Template[F[_], T](
     debug(
       meta.namespace.get,
       s"Creating new deployment for KDC: ${meta.name}"
-    ) *>
-      F.delay {
-        val spec = deploymentSpec(meta.name.get, realm)
-        resource.createOrReplace(client, spec, meta)
-      }
+    ) *> F.delay {
+      val spec = deploymentSpec(meta.name.get, realm)
+      resource.createOrReplace(client, spec, meta)
+    }
 }

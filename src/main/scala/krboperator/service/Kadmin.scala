@@ -78,7 +78,7 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       pod <- waitForPod(context)
       podName = pod.metadata.get.name.get
 
-      principals <- F.defer {
+      principals <- {
         val groupedByKeytab = principals.groupBy(_.keytab)
         val keytabs = groupedByKeytab.toList.map { case (keytab, principals) =>
           val path = Paths.get(pathGen.keytabToPath(randomString, keytab))

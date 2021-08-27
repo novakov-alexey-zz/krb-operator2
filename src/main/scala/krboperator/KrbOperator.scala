@@ -15,11 +15,13 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.io.File
 import scala.reflect.ClassTag
+import krboperator.service.Template
+import krboperator.service.Template.implicits._
 
 object KrbOperator extends IOApp with Codecs {
   implicit def unsafeLogger[F[_]: Sync]: Logger[F] = Slf4jLogger.getLogger[F]
 
-  val kubernetesClient: Resource[IO, KubernetesClient[IO]] =
+  val kubernetesClient =
     KubernetesClient[IO](
       KubeConfig.fromFile[IO](
         new File(s"${System.getProperty("user.home")}/.kube/config")
@@ -32,21 +34,41 @@ object KrbOperator extends IOApp with Codecs {
   val operatorCfg =
     AppConfig.load.fold(e => sys.error(s"failed to load config: $e"), identity)
 
-  override def run(args: List[String]): IO[ExitCode] = {
-    implicit lazy val serverController = ServerController.instance[IO]
+  def crdContext[A: ClassTag] = {
+    val kind = implicitly[ClassTag[A]].runtimeClass.getSimpleName
+    val plural = s"${kind.toLowerCase}s"
+    CrdContext(
+      group,
+      "v1",
+      plural
+    ) //TODO: version to extract to configuration
+  }
 
+  override def run(args: List[String]): IO[ExitCode] =
     kubernetesClient
       .use { client =>
-        val secrets = new Secrets[IO](client, operatorCfg)
-        val kadmin = new Kadmin[IO](client, operatorCfg)
-        implicit lazy val principalController =
-          new PrincipalController[IO](secrets, kadmin, client)
-
-        val server = watchCr[IO, KrbServer, KrbServerStatus](client)
-        val principals = watchCr[IO, Principals, PrincipalsStatus](client)
-        Stream(server, principals).parJoinUnbounded.compile.drain
+        createWatchers(client).parJoinUnbounded.compile.drain
       }
       .as(ExitCode.Success)
+
+  def createWatchers(client: KubernetesClient[IO]) = {
+    val secrets = new Secrets(client, operatorCfg)
+    val kadmin = new Kadmin(client, operatorCfg)
+    val template = new Template(client, secrets, operatorCfg)
+
+    implicit lazy val serverController =
+      new ServerController(
+        template,
+        secrets,
+        client,
+        crdContext[KrbServer]
+      )
+    implicit lazy val principalController =
+      new PrincipalController(secrets, kadmin, client, serverController)
+
+    val server = watchCr[IO, KrbServer, KrbServerStatus](client)
+    val principals = watchCr[IO, Principals, PrincipalsStatus](client)
+    Stream(server, principals)
   }
 
   def watchCr[F[
@@ -56,13 +78,7 @@ object KrbOperator extends IOApp with Codecs {
   )(implicit
       controller: Controller[F, Resource, Status]
   ) = {
-    val kind = implicitly[ClassTag[Resource]].runtimeClass.getSimpleName
-    val plural = s"${kind.toLowerCase}s"
-    val context = CrdContext(
-      group,
-      "v1",
-      plural
-    ) //TODO: version to extract to configuration
+    val context = crdContext[Resource]
     Stream.eval(
       Logger[F].info(s"Watching context: $context")
     ) >> kubernetesClient
