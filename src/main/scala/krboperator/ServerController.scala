@@ -3,18 +3,18 @@ package krboperator
 import cats.effect.Sync
 import cats.implicits._
 import cats.syntax.all.catsSyntaxApply
-import com.goyeau.kubernetes.client.crd.CustomResource
-import krboperator.Controller.{NewStatus, noStatus}
-import org.typelevel.log4cats.Logger
-import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import krboperator.service.Template
-import krboperator.service.Template._
-import LoggingUtils._
-import io.circe.generic.extras.auto._
-import krboperator.service.Secrets
 import com.goyeau.kubernetes.client.KubernetesClient
-import com.goyeau.kubernetes.client.crd.CrdContext
-import com.goyeau.kubernetes.client.crd.CustomResourceList
+import com.goyeau.kubernetes.client.crd.{
+  CrdContext,
+  CustomResource,
+  CustomResourceList
+}
+import io.circe.generic.extras.auto._
+import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+import krboperator.Controller.NewStatus
+import krboperator.LoggingUtils._
+import krboperator.service.{Secrets, Template}
+import org.typelevel.log4cats.Logger
 
 class ServerController[F[_]](
     template: Template[F],
@@ -51,8 +51,8 @@ class ServerController[F[_]](
     status <- template.delete(meta)
   } yield status
 
-  def currentServers: F[CustomResourceList[KrbServer, KrbServerStatus]] = 
-    client.customResources[KrbServer, KrbServerStatus](crdContext).list()  
+  def currentServers: F[CustomResourceList[KrbServer, KrbServerStatus]] =
+    client.customResources[KrbServer, KrbServerStatus](crdContext).list()
 
   private def getNamespace(meta: Option[ObjectMeta]): F[(ObjectMeta, String)] =
     for {

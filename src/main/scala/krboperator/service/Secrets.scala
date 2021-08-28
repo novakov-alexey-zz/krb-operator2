@@ -1,22 +1,17 @@
 package krboperator.service
 
-import java.io.ByteArrayInputStream
-import java.nio.file.Files
-import java.util.Base64
-
 import cats.effect.Sync
 import cats.implicits._
-
-import scala.jdk.CollectionConverters._
-import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import io.k8s.api.core.v1.Secret
-import org.typelevel.log4cats.Logger
 import com.goyeau.kubernetes.client.KubernetesClient
-import krboperator.KrbOperatorCfg
-import krboperator.LoggingUtils
-import Secrets._
-import krboperator.KeytabAndPassword
-import ServiceUtils._
+import io.k8s.api.core.v1.Secret
+import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+import krboperator.{KeytabAndPassword, KrbOperatorCfg, LoggingUtils}
+import krboperator.service.Secrets._
+import krboperator.service.ServiceUtils._
+import org.typelevel.log4cats.Logger
+
+import java.nio.file.Files
+import java.util.Base64
 import scala.util.Random
 
 object Secrets {

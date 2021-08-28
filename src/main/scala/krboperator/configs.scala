@@ -6,9 +6,9 @@ import pureconfig.generic.ProductHint
 import pureconfig.generic.auto._
 import pureconfig.{CamelCase, ConfigFieldMapping, ConfigSource}
 
+import java.io.File
 import scala.concurrent.duration.FiniteDuration
 import scala.jdk.CollectionConverters._
-import java.io.File
 
 final case class KeytabCommand(randomKey: String, noRandomKey: String)
 final case class Commands(addPrincipal: String, addKeytab: KeytabCommand)

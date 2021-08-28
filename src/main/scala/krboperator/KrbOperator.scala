@@ -9,14 +9,13 @@ import fs2.{Pipe, Stream}
 import io.circe.generic.extras.auto._
 import io.circe.{Decoder, Encoder}
 import krboperator.Controller.NewStatus
-import krboperator.service.{Kadmin, Secrets}
+import krboperator.service.Template.implicits._
+import krboperator.service.{Kadmin, Secrets, Template}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.io.File
 import scala.reflect.ClassTag
-import krboperator.service.Template
-import krboperator.service.Template.implicits._
 
 object KrbOperator extends IOApp with Codecs {
   implicit def unsafeLogger[F[_]: Sync]: Logger[F] = Slf4jLogger.getLogger[F]

@@ -1,19 +1,18 @@
 package krboperator
 
+import cats.Parallel
 import cats.effect.Sync
 import cats.implicits._
+import com.goyeau.kubernetes.client.KubernetesClient
 import com.goyeau.kubernetes.client.crd.CustomResource
-import org.typelevel.log4cats.Logger
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import krboperator.Controller.{NewStatus, noStatus}
-import krboperator.service.{Kadmin, KadminContext, KerberosState, Secrets}
+import krboperator.Controller.NewStatus
 import krboperator.LoggingUtils._
-import PrincipalController._
+import krboperator.PrincipalController._
+import krboperator.service.{Kadmin, KadminContext, KerberosState, Secrets}
+import org.typelevel.log4cats.Logger
 
 import java.nio.file.Path
-import com.goyeau.kubernetes.client.KubernetesClient
-import cats.Parallel
-import com.goyeau.kubernetes.client.crd.CustomResourceList
 
 object PrincipalController {
   val ServerLabel = "krb-operator.novakov-alexey.github.io/server"
@@ -111,7 +110,7 @@ class PrincipalController[F[_]: Parallel](
       .getOrElse(
         Either.left(
           new RuntimeException(
-            s"Failed to find ${classOf[KrbServer].getSimpleName()} resource with name '$serverName'"
+            s"Failed to find ${classOf[KrbServer].getSimpleName} resource with name '$serverName'"
           )
         )
       )
@@ -149,7 +148,7 @@ class PrincipalController[F[_]: Parallel](
                 s"Creating secret: $secretName"
               )
               state <- kadmin.createPrincipalsAndKeytabs(principals, context)
-              statuses <- copyKeytabs(namespace, state)
+              statuses <- downloadKeytabsFromServer(namespace, state)
               _ <- checkStatuses(statuses)
               _ <- secret.create(namespace, state.principals, secretName)
               _ <- info(
@@ -183,7 +182,7 @@ class PrincipalController[F[_]: Parallel](
     })
   }
 
-  private def copyKeytabs(
+  private def downloadKeytabsFromServer(
       namespace: String,
       state: KerberosState
   ): F[List[(Path, Boolean)]] =

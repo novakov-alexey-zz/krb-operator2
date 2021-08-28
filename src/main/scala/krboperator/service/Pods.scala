@@ -2,20 +2,16 @@ package krboperator.service
 
 import cats.effect.{Async, Temporal}
 import cats.implicits._
-
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.atomic.AtomicBoolean
-import scala.concurrent.duration.{FiniteDuration, _}
-import scala.jdk.CollectionConverters._
-import scala.util.Using
 import com.goyeau.kubernetes.client.KubernetesClient
 import com.goyeau.kubernetes.client.api.ExecStream
 import com.goyeau.kubernetes.client.api.ExecStream.{StdErr, StdOut}
 import io.k8s.api.core.v1.Pod
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import org.typelevel.log4cats.Logger
 import krboperator.LoggingUtils
-import ServiceUtils._
+import krboperator.service.ServiceUtils._
+import org.typelevel.log4cats.Logger
+
+import scala.concurrent.duration.{FiniteDuration, _}
 
 trait PodsAlg[F[_]] {
 

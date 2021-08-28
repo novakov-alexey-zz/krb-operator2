@@ -2,40 +2,17 @@ package krboperator.service
 
 import cats.effect.{Async, Sync, Temporal}
 import cats.implicits._
-
-import java.io.ByteArrayInputStream
-import java.nio.file.{Path, Paths}
-import scala.concurrent.duration._
-import scala.io.Source
-import scala.util.{Random, Using}
-import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import io.k8s.api.apps.v1.Deployment
-import io.k8s.api.core.v1.Service
-import com.goyeau.kubernetes.client.KubernetesClient
+import com.goyeau.kubernetes.client.{IntValue, KubernetesClient}
+import io.k8s.api.apps.v1.{Deployment, DeploymentSpec}
+import io.k8s.api.core.v1._
+import io.k8s.apimachinery.pkg.apis.meta.v1.{LabelSelector, ObjectMeta}
+import krboperator.{KrbOperatorCfg, LoggingUtils}
+import krboperator.service.ServiceUtils._
+import krboperator.service.Template._
 import org.http4s.Status
 import org.typelevel.log4cats.Logger
 
-import krboperator.LoggingUtils
-import krboperator.KrbOperatorCfg
-import Template._
-import io.k8s.api.core.v1.ServiceSpec
-import io.k8s.api.core.v1.ServicePort
-import io.k8s.api.core.v1.PodTemplateSpec
-import com.goyeau.kubernetes.client.IntOrString
-import com.goyeau.kubernetes.client.IntValue
-import ServiceUtils._
-import io.k8s.api.apps.v1.DeploymentSpec
-import io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
-import io.k8s.api.core.v1.PodSpec
-import io.k8s.api.core.v1.Container
-import io.k8s.api.core.v1.EnvVar
-import io.k8s.api.core.v1.Probe
-import io.k8s.api.core.v1.ExecAction
-import io.k8s.api.core.v1.ContainerPort
-import io.k8s.api.core.v1.VolumeMount
-import io.k8s.api.core.v1.Volume
-import io.k8s.api.core.v1.EmptyDirVolumeSource
-import io.k8s.api.core.v1.SecretVolumeSource
+import scala.concurrent.duration._
 
 trait DeploymentResourceAlg[F[_]] {
   def delete(client: KubernetesClient[F], resource: Deployment): F[Boolean]

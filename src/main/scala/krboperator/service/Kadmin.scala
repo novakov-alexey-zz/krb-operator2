@@ -2,21 +2,16 @@ package krboperator.service
 
 import cats.effect.{Async, Temporal}
 import cats.implicits._
+import com.goyeau.kubernetes.client.KubernetesClient
+import io.k8s.api.core.v1.Pod
+import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+import krboperator.service.ServiceUtils._
+import krboperator._
+import org.typelevel.log4cats.Logger
 
 import java.nio.file.{Path, Paths}
 import scala.concurrent.duration._
 import scala.util.Random
-import krboperator.{Secret, LoggingUtils, KrbOperatorCfg}
-import krboperator.Principal
-import krboperator.Password
-import krboperator.Static
-import krboperator.service.Pods
-import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import io.k8s.api.core.v1.Pod
-import com.goyeau.kubernetes.client.KubernetesClient
-import org.typelevel.log4cats.Logger
-import krboperator.KeytabAndPassword
-import ServiceUtils._
 
 final case class Credentials(
     username: String,

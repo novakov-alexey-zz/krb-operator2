@@ -3,10 +3,10 @@ package krboperator.service
 import cats.effect.{Async, Temporal}
 import cats.syntax.all._
 import krboperator.LoggingUtils
-import WaitUtils._
+import krboperator.service.WaitUtils._
+import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration._
-import org.typelevel.log4cats.Logger
 
 object WaitUtils {
   val defaultDelay: FiniteDuration = 500.millis

@@ -1,7 +1,7 @@
 package krboperator.service
 
-import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 import cats.effect.Sync
+import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 
 object ServiceUtils {
 

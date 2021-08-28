@@ -1,7 +1,7 @@
 package krboperator
 
+import krboperator.LoggingUtils._
 import org.typelevel.log4cats.Logger
-import LoggingUtils._
 
 object LoggingUtils {
   val checkMark: String = "\u2714"
