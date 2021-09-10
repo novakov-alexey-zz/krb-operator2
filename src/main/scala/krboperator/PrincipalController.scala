@@ -4,6 +4,9 @@ import cats.Parallel
 import cats.effect.Sync
 import cats.implicits._
 import com.goyeau.kubernetes.client.KubernetesClient
+import com.goyeau.kubernetes.client.api.ExecStream.StdErr
+import com.goyeau.kubernetes.client.api.NamespacedPodsApi.ErrorOrStatus
+import com.goyeau.kubernetes.client.api.ParseFailure
 import com.goyeau.kubernetes.client.crd.CustomResource
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 import krboperator.Controller.NewStatus
@@ -23,6 +26,7 @@ class PrincipalController[F[_]: Parallel](
     kadmin: Kadmin[F],
     client: KubernetesClient[F],
     serverController: ServerController[F],
+    cfg: KrbOperatorCfg,
     parallelSecret: Boolean = true
 )(implicit F: Sync[F], val logger: Logger[F])
     extends Controller[F, Principals, PrincipalsStatus]
@@ -149,7 +153,7 @@ class PrincipalController[F[_]: Parallel](
               )
               state <- kadmin.createPrincipalsAndKeytabs(principals, context)
               statuses <- downloadKeytabsFromServer(namespace, state)
-              _ <- checkStatuses(statuses)
+              _ <- checkStatuses(statuses, state.podName)
               _ <- secret.create(namespace, state.principals, secretName)
               _ <- info(
                 namespace,
@@ -170,7 +174,10 @@ class PrincipalController[F[_]: Parallel](
       }
     } yield created
 
-  private def checkStatuses(statuses: List[(Path, Boolean)]): F[Unit] = {
+  private def checkStatuses(
+      statuses: List[(Path, Boolean)],
+      podName: String
+  ): F[Unit] = {
     val notAllCopied = !statuses.forall { case (_, copied) => copied }
     F.whenA(notAllCopied)(F.raiseError[Unit] {
       val paths = statuses
@@ -178,31 +185,71 @@ class PrincipalController[F[_]: Parallel](
           !copied
         }
         .map { case (path, _) => path }
-      new RuntimeException(s"Failed to upload keytab(s) $paths into POD")
+      new RuntimeException(
+        s"Failed to upload keytab(s) $paths into '$podName' pod"
+      )
     })
   }
 
   private def downloadKeytabsFromServer(
       namespace: String,
       state: KerberosState
-  ): F[List[(Path, Boolean)]] =
-    F.delay(state.principals.foldLeft(List.empty[(Path, Boolean)]) {
-      case (acc, principals) =>
-        val path = principals.keytabMeta.path
-        debug(
-          namespace,
-          s"Copying keytab '$path' from $namespace/${state.podName} POD"
-        )
-        val copied = true //TODO
-        // client.pods
-        // .namespace(namespace)
-        // .get(state.podName)
-        // .inContainer(operatorCfg.kadminContainer)
-        // .file(path.toString)
-        // .copy(path)
+  ): F[List[(Path, Boolean)]] = {
+    def errorMsg(cause: String, path: Path) =
+      s"Failed to download keytab at '$path' from $namespace/${state.podName}, cause: $cause"
 
-        acc :+ (path, copied)
-    })
+    state.principals.map { principals =>
+      val path = principals.keytabMeta.path
+      for {
+        _ <- debug(
+          namespace,
+          s"Copying keytab '$path' from $namespace/${state.podName} pod"
+        )
+        (errors: List[StdErr], maybeStatus: Option[ErrorOrStatus]) <-
+          client.pods
+            .namespace(namespace)
+            .downloadFile(state.podName, path, path, Some(cfg.kadminContainer))
+
+        noErrors <-
+          if (errors.nonEmpty) {
+            val cause = errors.map(_.asString).mkString("\n")
+            error(
+              namespace,
+              errorMsg(cause, path),
+              new RuntimeException("Pod stderr is not empty")
+            ) *>
+              false.pure[F]
+          } else true.pure[F]
+
+        successStatus <- checkStatus(maybeStatus).fold(
+          e => {
+            error(
+              namespace,
+              errorMsg(e, path),
+              new RuntimeException("Operation status was not successful")
+            ) *>
+              false.pure[F]
+          },
+          _ => true.pure[F]
+        )
+
+      } yield (path, noErrors && successStatus)
+    }.sequence
+  }
+
+  private def checkStatus(
+      maybeStatus: Option[ErrorOrStatus]
+  ): Either[String, Unit] =
+    maybeStatus match {
+      case Some(errorOrStatus) =>
+        errorOrStatus match {
+          case Right(status) if status.status.contains("Success") =>
+            ().asRight[String]
+          case Right(status)             => status.toString.asLeft[Unit]
+          case Left(ParseFailure(error)) => error.asLeft[Unit]
+        }
+      case _ => ().asRight[String]
+    }
 
   private def removeWorkingDirs(
       namespace: String,

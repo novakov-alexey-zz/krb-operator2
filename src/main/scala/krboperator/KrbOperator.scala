@@ -63,7 +63,7 @@ object KrbOperator extends IOApp with Codecs {
         crdContext[KrbServer]
       )
     implicit lazy val principalController =
-      new PrincipalController(secrets, kadmin, client, serverController)
+      new PrincipalController(secrets, kadmin, client, serverController, operatorCfg)
 
     val server = watchCr[IO, KrbServer, KrbServerStatus](client)
     val principals = watchCr[IO, Principals, PrincipalsStatus](client)

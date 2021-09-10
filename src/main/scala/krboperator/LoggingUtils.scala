@@ -29,7 +29,7 @@ object LoggingUtils {
   ): (String, String, Throwable) => F[Unit] =
     (namespace, msg, t) => {
       logger.error(t)(
-        s"${AnsiColors.gr}[ns: ${namespace}]${AnsiColors.xx} $msg"
+        s"${AnsiColors.gr}[ns: $namespace]${AnsiColors.xx} $msg"
       )
     }
 }

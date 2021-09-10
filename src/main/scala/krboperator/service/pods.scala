@@ -5,6 +5,7 @@ import cats.implicits._
 import com.goyeau.kubernetes.client.KubernetesClient
 import com.goyeau.kubernetes.client.api.ExecStream
 import com.goyeau.kubernetes.client.api.ExecStream.{StdErr, StdOut}
+import com.goyeau.kubernetes.client.api.NamespacedPodsApi.ErrorOrStatus
 import io.k8s.api.core.v1.Pod
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 import krboperator.LoggingUtils
@@ -52,17 +53,17 @@ class Pods[F[_]](implicit F: Async[F], T: Temporal[F], val logger: Logger[F])
       .exec(
         podName = podName,
         container = Some(containerName),
-        command = commands,
-        flow = (es: ExecStream) => List(es)
+        command = commands
       )
 
     for {
-      (messages, status) <- execution
-      success = status.exists(s => s.status == Some("Success"))
+      (messages: List[ExecStream], maybeStatus: Option[ErrorOrStatus]) <-
+        execution
+      success = maybeStatus.exists(_.exists(_.status.contains("Success")))
       errors = messages.collect { case StdErr(d) => d }
       res <-
         if (success && errors.isEmpty) {
-          val out = messages.collect { case StdOut(d) => d }
+          val out = messages.collect { case o: StdOut => o.asString }
           debug(
             namespace,
             s"Successfully executed in $namespace/$podName/$containerName stdout:\n$out"
@@ -70,7 +71,7 @@ class Pods[F[_]](implicit F: Async[F], T: Temporal[F], val logger: Logger[F])
         } else
           F.raiseError(
             new RuntimeException(
-              s"Failed to exec into $namespace/$podName/$containerName, status = $status, error(s): $errors"
+              s"Failed to exec into $namespace/$podName/$containerName, status = $maybeStatus, error(s): $errors"
             )
           )
     } yield res

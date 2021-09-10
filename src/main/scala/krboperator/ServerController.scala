@@ -61,7 +61,6 @@ class ServerController[F[_]](
         meta.namespace,
         new RuntimeException(s"Namespace is empty in $meta")
       )
-
     } yield (meta, ns)
 
   private def onApply(
