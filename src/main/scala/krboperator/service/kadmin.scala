@@ -5,8 +5,8 @@ import cats.implicits._
 import com.goyeau.kubernetes.client.KubernetesClient
 import io.k8s.api.core.v1.Pod
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import krboperator.service.ServiceUtils._
 import krboperator._
+import krboperator.service.ServiceUtils._
 import org.typelevel.log4cats.Logger
 
 import java.nio.file.{Path, Paths}
@@ -21,14 +21,18 @@ final case class Credentials(
   override def toString: String = s"Credentials($username, <hidden>)"
 }
 
-final case class PrincipalsWithKey(
+final case class PrincipalGroup(
     credentials: List[Credentials],
-    keytabMeta: KeytabMeta
+    keytab: KeytabMeta
 )
-final case class KeytabMeta(name: String, path: Path)
+final case class KeytabMeta(
+    name: String,
+    remotePath: Path,
+    localPath: Option[Path] = None
+)
 final case class KerberosState(
     podName: String,
-    principals: List[PrincipalsWithKey]
+    principals: List[PrincipalGroup]
 )
 final case class KadminContext(
     krbServerName: String,
@@ -87,7 +91,7 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
               Credentials(p.name, getPassword(p.password), p.secret)
             )
             _ <- addKeytab(context, path, credentials, podName)
-          } yield PrincipalsWithKey(credentials, KeytabMeta(keytab, path))
+          } yield PrincipalGroup(credentials, KeytabMeta(keytab, path))
         }
         keytabs.sequence
       }
@@ -165,7 +169,9 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
       )
     } yield ()).adaptError { case e =>
       new RuntimeException(
-        s"Failed to execute command = $command in $podName pod of ${context.meta.namespace} namepspace "
+        s"Failed to execute command in ${context.meta.namespace
+          .getOrElse("unknown_namespace")}/$podName pod",
+        e
       )
     }
 

@@ -11,6 +11,7 @@ import krboperator.service.Template._
 import krboperator.{KrbOperatorCfg, LoggingUtils}
 import org.http4s.Status
 import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import scala.concurrent.duration._
 
@@ -59,7 +60,7 @@ class DeploymentResource[F[_]](implicit F: Sync[F])
       .namespace(meta.namespace.get)
       .createOrUpdate(deployment)
       .flatMap {
-        case Status.Ok => F.pure(deployment)
+        case Status.Created => F.pure(deployment)
         case s =>
           F.raiseError(
             new RuntimeException(
@@ -75,7 +76,7 @@ class DeploymentResource[F[_]](implicit F: Sync[F])
       status <- resource.status
       statusReplicas <- status.replicas
       availableReplicas <- status.availableReplicas
-      ready = (replicas == statusReplicas && replicas <= availableReplicas)
+      ready = replicas == statusReplicas && replicas <= availableReplicas
     } yield ready
     ready.getOrElse(false)
   }
@@ -104,16 +105,17 @@ class Template[F[_]](
 )(implicit
     F: Async[F],
     T: Temporal[F],
-    resource: DeploymentResourceAlg[F],
-    val logger: Logger[F]
+    deployments: DeploymentResourceAlg[F]
 ) extends WaitUtils
     with LoggingUtils[F] {
+
+  implicit val logger: Logger[F] = Slf4jLogger.getLogger[F]
 
   def delete(meta: ObjectMeta): F[Unit] =
     (for {
       deployment <- findDeployment(meta)
       deleteDeployment <- deployment.fold(F.pure(false))(d =>
-        resource.delete(client, d)
+        deployments.delete(client, d)
       )
       service <- findService(meta)
       namespace <- getNamespace(meta)
@@ -139,26 +141,29 @@ class Template[F[_]](
       error(meta.namespace.get, "Failed to delete", e)
     }
 
-  def waitForDeployment(metadata: ObjectMeta): F[Unit] =
-    info(
-      metadata.namespace.get,
+  def waitForDeployment(metadata: ObjectMeta): F[Unit] = for {
+    ns <- getNamespace(metadata)
+    _ <- info(
+      ns,
       s"Going to wait for deployment until ready: $deploymentTimeout"
-    ) *>
-      waitFor[F](metadata.namespace.get, deploymentTimeout) {
-        findDeployment(metadata).flatMap { d =>
-          d.fold(false)(resource.isDeploymentReady).pure[F]
-        }
-      }.flatMap { ready =>
-        if (ready)
-          debug(metadata.namespace.get, s"deployment is ready: $metadata")
-        else
-          F.raiseError(
-            new RuntimeException("Failed to wait for deployment readiness")
-          )
+    )
+
+    ready <- waitFor[F](ns, deploymentTimeout) {
+      findDeployment(metadata).flatMap { d =>
+        d.fold(false)(deployments.isDeploymentReady).pure[F]
       }
+    }
+    _ <-
+      if (ready)
+        debug(ns, s"deployment is ready: $metadata")
+      else
+        F.raiseError(
+          new RuntimeException("Failed to wait for deployment readiness")
+        )
+  } yield ()
 
   def findDeployment(meta: ObjectMeta): F[Option[Deployment]] =
-    resource.findDeployment(client, meta)
+    deployments.findDeployment(client, meta)
 
   def findService(meta: ObjectMeta): F[Option[Service]] =
     client.services
@@ -167,13 +172,13 @@ class Template[F[_]](
       .map(Option(_))
       .handleError(_ => None)
 
-  def createService(meta: ObjectMeta): F[Unit] =
+  def createService(resourceMeta: ObjectMeta): F[Unit] =
     for {
       name <- F.fromOption(
-        meta.name,
-        new RuntimeException("Metadata name is emnty!")
+        resourceMeta.name,
+        new RuntimeException("Metadata name is empty!")
       )
-      ns <- getNamespace(meta)
+      ns <- getNamespace(resourceMeta)
       s = Specs.service(name)
       _ <- client.services
         .namespace(ns)
@@ -181,7 +186,7 @@ class Template[F[_]](
         .void
         .recoverWith { case e =>
           for {
-            missing <- findService(meta).map(_.isEmpty)
+            missing <- findService(resourceMeta).map(_.isEmpty)
             error <- F.whenA(missing)(F.raiseError(e))
           } yield error
         }
@@ -198,9 +203,8 @@ class Template[F[_]](
         meta.name,
         new RuntimeException("Deployment name is empty")
       )
-      _ <- F.delay {
-        val spec = Specs.deployment(deploymentName, realm, cfg)
-        resource.createOrReplace(client, spec, meta)
-      }
+
+      spec = Specs.deployment(deploymentName, realm, cfg)
+      _ <- deployments.createOrReplace(client, spec, meta) //TODO: check deployment status?
     } yield ()
 }

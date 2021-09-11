@@ -1,7 +1,7 @@
 package krboperator
 
 import cats.effect._
-import cats.implicits.{catsSyntaxFlatMapOps, toFunctorOps}
+import cats.implicits.{catsSyntaxFlatMapOps, toBifunctorOps, toFunctorOps}
 import com.goyeau.kubernetes.client.EventType.{ADDED, DELETED, ERROR, MODIFIED}
 import com.goyeau.kubernetes.client._
 import com.goyeau.kubernetes.client.crd.{CrdContext, CustomResource}
@@ -30,9 +30,6 @@ object KrbOperator extends IOApp with Codecs {
   val group =
     "krb-operator.novakov-alexey.github.io" //TODO: extract to configuration
 
-  val operatorCfg =
-    AppConfig.load.fold(e => sys.error(s"failed to load config: $e"), identity)
-
   def crdContext[A: ClassTag] = {
     val kind = implicitly[ClassTag[A]].runtimeClass.getSimpleName
     val plural = s"${kind.toLowerCase}s"
@@ -46,11 +43,23 @@ object KrbOperator extends IOApp with Codecs {
   override def run(args: List[String]): IO[ExitCode] =
     kubernetesClient
       .use { client =>
-        createWatchers(client).parJoinUnbounded.compile.drain
+        for {
+          operatorCfg <- IO.fromEither(
+            AppConfig.load
+              .leftMap(e => new RuntimeException(s"failed to load config: $e"))
+          )
+          _ <- createWatchers(
+            client,
+            operatorCfg
+          ).parJoinUnbounded.compile.drain
+        } yield ()
       }
       .as(ExitCode.Success)
 
-  def createWatchers(client: KubernetesClient[IO]) = {
+  def createWatchers(
+      client: KubernetesClient[IO],
+      operatorCfg: KrbOperatorCfg
+  ) = {
     val secrets = new Secrets(client, operatorCfg)
     val kadmin = new Kadmin(client, operatorCfg)
     val template = new Template(client, secrets, operatorCfg)
@@ -63,7 +72,13 @@ object KrbOperator extends IOApp with Codecs {
         crdContext[KrbServer]
       )
     implicit lazy val principalController =
-      new PrincipalController(secrets, kadmin, client, serverController, operatorCfg)
+      new PrincipalController(
+        secrets,
+        kadmin,
+        client,
+        serverController,
+        operatorCfg
+      )
 
     val server = watchCr[IO, KrbServer, KrbServerStatus](client)
     val principals = watchCr[IO, Principals, PrincipalsStatus](client)
@@ -97,7 +112,7 @@ object KrbOperator extends IOApp with Codecs {
           Logger[F].error(s"Error on watching events: $err").map(_ => None)
         case Right(event) =>
           Logger[F].debug(s"Received event: $event") >> {
-            event.`type` match {
+            event.`type` match { //TODO: do not crash on controller IO error, but just log as error
               case ADDED    => controller.onAdd(event.`object`)
               case MODIFIED => controller.onModify(event.`object`)
               case DELETED =>

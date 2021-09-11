@@ -6,8 +6,14 @@ import io.k8s.api.core.v1._
 import io.k8s.apimachinery.pkg.apis.meta.v1.{LabelSelector, ObjectMeta}
 import krboperator.KrbOperatorCfg
 
+import scala.util.Random
+
 object Specs {
-  def deployment(kdcName: String, krbRealm: String, cfg: KrbOperatorCfg): Deployment =
+  def deployment(
+      kdcName: String,
+      krbRealm: String,
+      cfg: KrbOperatorCfg
+  ): Deployment =
     Deployment(
       metadata = Some(
         ObjectMeta(
@@ -135,7 +141,7 @@ object Specs {
                     Volume(
                       name = "share",
                       emptyDir =
-                        Some(EmptyDirVolumeSource(medium = Some("share")))
+                        Some(EmptyDirVolumeSource(medium = Some("Memory")))
                     ),
                     Volume(
                       name = "kdc-config",
@@ -208,5 +214,17 @@ object Specs {
           `type` = Some("ClusterIP")
         )
       )
+    )
+
+  private def randomPassword =
+    Random.alphanumeric.take(10).mkString
+
+  def adminSecret(name: String) =
+    Secret(
+      metadata = Some(
+        ObjectMeta(name = Some(name))
+      ),
+      `type` = Some("Opaque"),
+      stringData = Some(Map("krb5_pass" -> randomPassword))
     )
 }

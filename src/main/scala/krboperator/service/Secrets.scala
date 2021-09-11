@@ -5,14 +5,14 @@ import cats.implicits._
 import com.goyeau.kubernetes.client.KubernetesClient
 import io.k8s.api.core.v1.Secret
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-import krboperator.{KeytabAndPassword, KrbOperatorCfg, LoggingUtils}
+import krboperator.PrincipalController.DownloadStatus
 import krboperator.service.Secrets._
 import krboperator.service.ServiceUtils._
+import krboperator.{KeytabAndPassword, KrbOperatorCfg, LoggingUtils}
 import org.typelevel.log4cats.Logger
 
 import java.nio.file.Files
 import java.util.Base64
-import scala.util.Random
 
 object Secrets {
   val principalSecretLabel = Map("app" -> "krb")
@@ -61,61 +61,73 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
 
   def create(
       namespace: String,
-      principals: List[PrincipalsWithKey],
+      statuses: List[DownloadStatus],
       secretName: String
-  ): F[Unit] =
-    F.delay {
-      val keytabs = principals.map(_.keytabMeta)
-      debug(
-        namespace,
-        s"Creating secret for [${keytabs.mkString(",")}] keytabs"
-      )
-      val secretBase = Secret(
-        metadata = Some(
-          ObjectMeta(
-            name = Some(secretName),
-            labels = Some(
-              principalSecretLabel
+  ): F[Unit] = {
+    val keytabs = statuses.map(_.principals.keytab)
+    val secretBase = Secret(
+      metadata = Some(
+        ObjectMeta(
+          name = Some(secretName),
+          labels = Some(
+            principalSecretLabel
+          )
+        )
+      ),
+      `type` = Some("opaque")
+    )
+
+    val secret = statuses
+      .foldLeft(secretBase) { case (acc, status) =>
+        val bytes = Files.readAllBytes(
+          status.principals.keytab.localPath
+            .getOrElse(status.principals.keytab.remotePath)
+        )
+
+        val secretWithKeytab = acc.copy(data =
+          Some(
+            acc.data.getOrElse(Map.empty[String, String]) ++ Map(
+              status.principals.keytab.name ->
+                Base64.getEncoder.encodeToString(bytes)
             )
           )
-        ),
-        `type` = Some("opaque")
-      )
+        )
 
-      val secret = principals
-        .foldLeft(secretBase) { case (acc, principals) =>
-          val bytes = Files.readAllBytes(principals.keytabMeta.path)
-          acc.copy(data =
-            acc.data.map(
-              _ ++ Map(
-                principals.keytabMeta.name ->
-                  Base64.getEncoder.encodeToString(bytes)
-              )
-            )
-          )
+        val credentialsWithPassword = status.principals.credentials
+          .filter(_.secret match {
+            case KeytabAndPassword(_) => true
+            case _                    => false
+          })
 
-          val credentialsWithPassword = principals.credentials
-            .filter(_.secret match {
-              case KeytabAndPassword(_) => true
-              case _                    => false
-            })
-
-          credentialsWithPassword
-            .foldLeft(secretBase) { case (acc, c) =>
-              acc.copy(data =
-                acc.data.map(
-                  _ ++ Map(
-                    c.username -> Base64.getEncoder.encodeToString(
-                      c.password.getBytes()
-                    )
+        credentialsWithPassword
+          .foldLeft(secretWithKeytab) { case (acc, c) =>
+            acc.copy(data =
+              Some(
+                acc.data.getOrElse(Map.empty[String, String]) ++ Map(
+                  c.username -> Base64.getEncoder.encodeToString(
+                    c.password.getBytes()
                   )
                 )
               )
-            }
-        }
+            )
+          }
+      }
 
-      client.secrets.namespace(namespace).createOrUpdate(secret)
-    }
+    for {
+      _ <- debug(
+        namespace,
+        s"Creating secret for [${keytabs.mkString(",")}] keytab(s)"
+      )
+      status <- client.secrets.namespace(namespace).createOrUpdate(secret)
+      _ <- F.whenA(!status.isSuccess)(
+        F.raiseError(
+          new RuntimeException(
+            s"Failed to create secret, cause: ${status.toString}"
+          )
+        )
+      )
+    } yield ()
+  }
 
   def delete(namespace: String): F[Unit] =
     client.secrets.namespace(namespace).deleteAll(principalSecretLabel).void
@@ -154,22 +166,19 @@ class Secrets[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
         .handleError(_ => None)
     } yield secret
 
-  private def randomPassword = Random.alphanumeric.take(10).mkString
-
-  private def secretSpec(name: String) =
-    Secret(
-      metadata = Some(
-        ObjectMeta(name = Some(name))
-      ),
-      data = Some(Map("krb5_pass" -> randomPassword))
-    )
-
   def createAdminSecret(meta: ObjectMeta): F[Unit] = {
     val secretName = cfg.k8sResourcesPrefix + "-krb-admin-pwd"
-    val secret = secretSpec(secretName)
+    val secret = Specs.adminSecret(secretName)
     for {
       ns <- getNamespace(meta)
-      _ <- client.secrets.namespace(ns).createOrUpdate(secret)
+      status <- client.secrets.namespace(ns).createOrUpdate(secret)
+      _ <- F.whenA(!status.isSuccess)(
+        F.raiseError(
+          new RuntimeException(
+            s"Failed to create admin secret, cause: ${status.toString}"
+          )
+        )
+      )
     } yield ()
   }
 }

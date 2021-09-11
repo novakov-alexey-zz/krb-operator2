@@ -1,0 +1,21 @@
+apiVersion: krb-operator.novakov-alexey.github.io/v1
+kind: Principals
+metadata:
+  name: my-krb
+  labels:
+    krb-operator.novakov-alexey.github.io/server: my-krb1
+spec:
+  list:
+    - name: client1
+      password:
+        type: static
+        value: mypass
+      keytab: cluster.keytab
+      secret:
+        type: Keytab
+        name: cluster-keytab
+    - name: user2
+      keytab: cluster.keytab
+      secret:
+        type: KeytabAndPassword
+        name: user2-keytab

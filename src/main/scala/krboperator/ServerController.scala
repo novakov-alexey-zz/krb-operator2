@@ -15,6 +15,7 @@ import krboperator.Controller.NewStatus
 import krboperator.LoggingUtils._
 import krboperator.service.{Secrets, Template}
 import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 class ServerController[F[_]](
     template: Template[F],
@@ -22,11 +23,12 @@ class ServerController[F[_]](
     client: KubernetesClient[F],
     crdContext: CrdContext
 )(implicit
-    F: Sync[F],
-    val logger: Logger[F]
+    F: Sync[F]
 ) extends Controller[F, KrbServer, KrbServerStatus]
     with LoggingUtils[F]
     with Codecs {
+
+  implicit val logger: Logger[F] = Slf4jLogger.getLogger[F]
 
   override def onAdd(
       resource: CustomResource[KrbServer, KrbServerStatus]
@@ -69,6 +71,10 @@ class ServerController[F[_]](
   ): F[NewStatus[KrbServerStatus]] = {
     for {
       (meta, ns) <- getNamespace(resource.metadata)
+      name <- F.fromOption(
+        meta.name,
+        new RuntimeException(s"Resource name is empty: ${meta.name}")
+      )
       _ <- info(
         ns,
         s"'$eventName' event: ${resource.spec}, ${resource.metadata}"
@@ -78,26 +84,26 @@ class ServerController[F[_]](
         case Some(_) =>
           debug(
             ns,
-            s"$checkMark [${meta.name}] Service is found, so skipping its creation"
+            s"$checkMark [$name] Service is found, so skipping its creation"
           )
 
         case None =>
           template.createService(meta) *>
-            info(ns, s"$checkMark Service ${meta.name} created")
+            info(ns, s"$checkMark Service $name created")
       }
       adminSecret <- secret.findAdminSecret(meta)
       _ <- adminSecret match {
         case Some(_) =>
           debug(
             ns,
-            s"$checkMark [${meta.name}] Admin Secret is found, so skipping its creation"
+            s"$checkMark [$name] Admin Secret is found, so skipping its creation"
           )
 
         case None =>
           secret.createAdminSecret(meta) *>
             info(
               ns,
-              s"$checkMark Admin secret ${meta.name} created"
+              s"$checkMark Admin secret ${name} created"
             )
       }
       deployment <- template.findDeployment(meta)
@@ -105,7 +111,7 @@ class ServerController[F[_]](
         case Some(_) =>
           debug(
             ns,
-            s"$checkMark [${meta.name}] Deployment is found, so skipping its creation"
+            s"$checkMark [$name] Deployment is found, so skipping its creation"
           )
 
         case None =>
@@ -124,7 +130,7 @@ class ServerController[F[_]](
     val ns = resource.metadata.flatMap(_.namespace).getOrElse("n/a")
     error(
       ns,
-      s"[$ns] Failed to handle create/apply event: $resource, ${resource.metadata}",
+      s"Failed to handle create/apply event: $resource, ${resource.metadata}",
       e
     ) *> F.pure(Some(KrbServerStatus(processed = false, e.getMessage)))
   }

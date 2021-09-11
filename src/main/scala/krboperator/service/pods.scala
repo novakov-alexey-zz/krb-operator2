@@ -57,10 +57,15 @@ class Pods[F[_]](implicit F: Async[F], T: Temporal[F], val logger: Logger[F])
       )
 
     for {
-      (messages: List[ExecStream], maybeStatus: Option[ErrorOrStatus]) <-
-        execution
+      (messages, maybeStatus) <- execution
       success = maybeStatus.exists(_.exists(_.status.contains("Success")))
-      errors = messages.collect { case StdErr(d) => d }
+      errors = messages
+        .collect { case e: StdErr => e.asString }
+        .mkString("")
+        .split("\n")
+        .filterNot(ignoredErrors)
+        .filterNot(_.isEmpty())
+
       res <-
         if (success && errors.isEmpty) {
           val out = messages.collect { case o: StdOut => o.asString }
@@ -69,13 +74,21 @@ class Pods[F[_]](implicit F: Async[F], T: Temporal[F], val logger: Logger[F])
             s"Successfully executed in $namespace/$podName/$containerName stdout:\n$out"
           )
         } else
-          F.raiseError(
+          F.raiseError {
+            val errorMsg = errors.zipWithIndex
+              .map { case (e, i) =>
+                s"stderr[$i]:$e"
+              }
+              .mkString("\n")
             new RuntimeException(
-              s"Failed to exec into $namespace/$podName/$containerName, status = $maybeStatus, error(s): $errors"
+              s"Failed to exec into $namespace/$podName/$containerName, status = $maybeStatus, error(s):\n$errorMsg"
             )
-          )
+          }
     } yield res
   }
+
+  private def ignoredErrors(error: String): Boolean =
+    error.startsWith("add_principal: Principal or policy already exists")
 
   def findPod(
       client: KubernetesClient[F]

@@ -12,13 +12,20 @@ import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 import krboperator.Controller.NewStatus
 import krboperator.LoggingUtils._
 import krboperator.PrincipalController._
-import krboperator.service.{Kadmin, KadminContext, KerberosState, Secrets}
+import krboperator.service._
 import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 object PrincipalController {
   val ServerLabel = "krb-operator.novakov-alexey.github.io/server"
+
+  case class DownloadStatus(
+      source: Path,
+      copied: Boolean,
+      principals: PrincipalGroup
+  )
 }
 
 class PrincipalController[F[_]: Parallel](
@@ -28,9 +35,11 @@ class PrincipalController[F[_]: Parallel](
     serverController: ServerController[F],
     cfg: KrbOperatorCfg,
     parallelSecret: Boolean = true
-)(implicit F: Sync[F], val logger: Logger[F])
+)(implicit F: Sync[F])
     extends Controller[F, Principals, PrincipalsStatus]
     with LoggingUtils[F] {
+
+  implicit val logger: Logger[F] = Slf4jLogger.getLogger[F]
 
   override def onAdd(
       resource: CustomResource[Principals, PrincipalsStatus]
@@ -133,7 +142,7 @@ class PrincipalController[F[_]: Parallel](
       serverName <- F.fromOption(
         server.metadata.flatMap(_.name),
         new RuntimeException(
-          s"Server name is empty in customer resource metadata ${server.metadata}"
+          s"Server name is empty in custom resource metadata: ${server.metadata}"
         )
       )
       context = KadminContext(
@@ -154,7 +163,7 @@ class PrincipalController[F[_]: Parallel](
               state <- kadmin.createPrincipalsAndKeytabs(principals, context)
               statuses <- downloadKeytabsFromServer(namespace, state)
               _ <- checkStatuses(statuses, state.podName)
-              _ <- secret.create(namespace, state.principals, secretName)
+              _ <- secret.create(namespace, statuses, secretName)
               _ <- info(
                 namespace,
                 s"$checkMark Keytab secret '$secretName' created"
@@ -163,7 +172,7 @@ class PrincipalController[F[_]: Parallel](
                 .handleErrorWith { e =>
                   error(
                     namespace,
-                    s"Failed to delete working directory(s) with keytab(s) in POD $namespace/${state.podName}",
+                    s"Failed to delete working directory(s) with keytab(s) in $namespace/${state.podName} pod",
                     e
                   )
                 }
@@ -175,18 +184,16 @@ class PrincipalController[F[_]: Parallel](
     } yield created
 
   private def checkStatuses(
-      statuses: List[(Path, Boolean)],
+      statuses: List[DownloadStatus],
       podName: String
   ): F[Unit] = {
-    val notAllCopied = !statuses.forall { case (_, copied) => copied }
+    val notAllCopied = !statuses.forall(_.copied)
     F.whenA(notAllCopied)(F.raiseError[Unit] {
       val paths = statuses
-        .filter { case (_, copied) =>
-          !copied
-        }
-        .map { case (path, _) => path }
+        .filter(s => !s.copied)
+        .map(_.source)
       new RuntimeException(
-        s"Failed to upload keytab(s) $paths into '$podName' pod"
+        s"Failed to download keytab(s) $paths from '$podName' pod"
       )
     })
   }
@@ -194,28 +201,36 @@ class PrincipalController[F[_]: Parallel](
   private def downloadKeytabsFromServer(
       namespace: String,
       state: KerberosState
-  ): F[List[(Path, Boolean)]] = {
+  ): F[List[DownloadStatus]] = {
     def errorMsg(cause: String, path: Path) =
       s"Failed to download keytab at '$path' from $namespace/${state.podName}, cause: $cause"
 
     state.principals.map { principals =>
-      val path = principals.keytabMeta.path
+      val remotePath = principals.keytab.remotePath
       for {
         _ <- debug(
           namespace,
-          s"Copying keytab '$path' from $namespace/${state.podName} pod"
+          s"Copying keytab '$remotePath' from $namespace/${state.podName} pod"
         )
-        (errors: List[StdErr], maybeStatus: Option[ErrorOrStatus]) <-
+        localPath <- F.delay(
+          Files.createTempFile(remotePath.getFileName.toString, "")
+        )
+        (errors, maybeStatus) <-
           client.pods
             .namespace(namespace)
-            .downloadFile(state.podName, path, path, Some(cfg.kadminContainer))
+            .downloadFile(
+              state.podName,
+              remotePath,
+              localPath,
+              Some(cfg.kadminContainer)
+            )
 
         noErrors <-
           if (errors.nonEmpty) {
             val cause = errors.map(_.asString).mkString("\n")
             error(
               namespace,
-              errorMsg(cause, path),
+              errorMsg(cause, remotePath),
               new RuntimeException("Pod stderr is not empty")
             ) *>
               false.pure[F]
@@ -225,7 +240,7 @@ class PrincipalController[F[_]: Parallel](
           e => {
             error(
               namespace,
-              errorMsg(e, path),
+              errorMsg(e, remotePath),
               new RuntimeException("Operation status was not successful")
             ) *>
               false.pure[F]
@@ -233,7 +248,13 @@ class PrincipalController[F[_]: Parallel](
           _ => true.pure[F]
         )
 
-      } yield (path, noErrors && successStatus)
+      } yield DownloadStatus(
+        remotePath,
+        noErrors && successStatus,
+        principals.copy(keytab =
+          principals.keytab.copy(localPath = Some(localPath))
+        )
+      )
     }.sequence
   }
 
@@ -257,7 +278,11 @@ class PrincipalController[F[_]: Parallel](
   ): F[Unit] =
     state.principals
       .map { p =>
-        kadmin.removeWorkingDir(namespace, state.podName, p.keytabMeta.path)
+        kadmin.removeWorkingDir(
+          namespace,
+          state.podName,
+          p.keytab.remotePath
+        )
       }
       .sequence
       .void
