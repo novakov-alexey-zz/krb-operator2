@@ -9,7 +9,7 @@ let union = k8s.union
 
 let deploymentName = "krb-operator"
 
-let version = env:OPERATOR_VERSION as Text ? "0.4.17" 
+let version = env:OPERATOR_VERSION as Text ? "0.1.0" 
 
 let deployment =
       schemas.Deployment::{

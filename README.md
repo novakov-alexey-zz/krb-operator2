@@ -1,7 +1,5 @@
 # Kerberos Operator 2
 
-**UNDER DEVELOPMENT**
-
 New version of Kerberos Operator, but this time completely written in Scala with Cats-Effects.
 
 This operator deployes KDC, Kadmin servers and creates principals and their keytabs as Kubernetes secrets.
