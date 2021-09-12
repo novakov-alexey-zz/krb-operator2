@@ -205,8 +205,8 @@ class PrincipalController[F[_]: Parallel](
     def errorMsg(cause: String, path: Path) =
       s"Failed to download keytab at '$path' from $namespace/${state.podName}, cause: $cause"
 
-    state.principals.map { principals =>
-      val remotePath = principals.keytab.remotePath
+    state.principals.map { group =>
+      val remotePath = group.keytab.remotePath
       for {
         _ <- debug(
           namespace,
@@ -251,8 +251,8 @@ class PrincipalController[F[_]: Parallel](
       } yield DownloadStatus(
         remotePath,
         noErrors && successStatus,
-        principals.copy(keytab =
-          principals.keytab.copy(localPath = Some(localPath))
+        group.copy(keytab =
+          group.keytab.copy(localPath = Some(localPath))
         )
       )
     }.sequence
