@@ -7,6 +7,7 @@ import io.k8s.api.core.v1.Pod
 import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 import krboperator._
 import krboperator.service.ServiceUtils._
+import Kadmin._
 import org.typelevel.log4cats.Logger
 
 import java.nio.file.{Path, Paths}
@@ -41,10 +42,6 @@ final case class KadminContext(
     adminPwd: String
 )
 
-object Kadmin {
-  val ExecInPodTimeout: FiniteDuration = 60.seconds
-}
-
 trait KeytabPathGen {
   def keytabToPath(prefix: String, name: String): String
 }
@@ -54,6 +51,11 @@ object KeytabPathGen {
     def keytabToPath(prefix: String, name: String): String =
       s"/tmp/$prefix/$name"
   }
+}
+
+object Kadmin {
+  val ExecInPodTimeout: FiniteDuration = 60.seconds
+  val IgnoredErrors = Set("add_principal: Principal or policy already exists")
 }
 
 class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
@@ -66,7 +68,7 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
     with LoggingUtils[F] {
 
   private lazy val executeInKadmin =
-    pods.executeInPod(client, cfg.kadminContainer) _
+    pods.executeInPod(client, cfg.kadminContainer, IgnoredErrors) _
 
   def createPrincipalsAndKeytabs(
       principals: List[Principal],

@@ -11,12 +11,17 @@ import io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
 import krboperator.LoggingUtils
 import krboperator.service.ServiceUtils._
 import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import scala.concurrent.duration.{FiniteDuration, _}
 
 trait PodsAlg[F[_]] {
 
-  def executeInPod(client: KubernetesClient[F], containerName: String)(
+  def executeInPod(
+      client: KubernetesClient[F],
+      containerName: String,
+      ingoredErrors: Set[String]
+  )(
       namespace: String,
       podName: String,
       commands: List[String]
@@ -38,57 +43,74 @@ object PodsAlg {
   implicit def k8sPod[F[_]: Async: Temporal: Logger]: PodsAlg[F] = new Pods[F]
 }
 
-class Pods[F[_]](implicit F: Async[F], T: Temporal[F], val logger: Logger[F])
+class Pods[F[_]](implicit F: Async[F], T: Temporal[F])
     extends PodsAlg[F]
     with WaitUtils
     with LoggingUtils[F] {
 
-  def executeInPod(client: KubernetesClient[F], containerName: String)(
-      namespace: String,
-      podName: String,
-      commands: List[String]
-  ): F[Unit] = {
-    val execution = client.pods
-      .namespace(namespace)
-      .exec(
-        podName = podName,
-        container = Some(containerName),
-        command = commands
-      )
+  implicit val logger: Logger[F] = Slf4jLogger.getLogger[F]
 
-    for {
-      (messages, maybeStatus) <- execution
-      success = maybeStatus.exists(_.exists(_.status.contains("Success")))
-      errors = messages
-        .collect { case e: StdErr => e.asString }
-        .mkString("")
-        .split("\n")
-        .filterNot(ignoredErrors)
-        .filterNot(_.isEmpty())
+  private def formatEvents(events: List[String]) =
+    if (events.nonEmpty)
+      ":\n" + events.zipWithIndex
+        .map { case (e, i) =>
+          s"[$i]$e"
+        }
+        .mkString("\n")
+    else " is empty"
 
-      res <-
-        if (success && errors.isEmpty) {
-          val out = messages.collect { case o: StdOut => o.asString }
-          debug(
-            namespace,
-            s"Successfully executed in $namespace/$podName/$containerName stdout:\n$out"
-          )
-        } else
-          F.raiseError {
-            val errorMsg = errors.zipWithIndex
-              .map { case (e, i) =>
-                s"stderr[$i]:$e"
-              }
-              .mkString("\n")
-            new RuntimeException(
-              s"Failed to exec into $namespace/$podName/$containerName, status = $maybeStatus, error(s):\n$errorMsg"
+    def executeInPod(
+        client: KubernetesClient[F],
+        containerName: String,
+        ingoredErrorPrefixes: Set[String]
+    )(
+        namespace: String,
+        podName: String,
+        commands: List[String]
+    ): F[Unit] = {
+      val execution = client.pods
+        .namespace(namespace)
+        .exec(
+          podName = podName,
+          container = Some(containerName),
+          command = commands
+        )
+
+      for {
+        (messages, maybeStatus) <- execution
+        success = maybeStatus.exists(_.exists(_.status.contains("Success")))
+        errors = messages
+          .collect { case e: StdErr => e.asString }
+          .mkString("")
+          .split("\n")
+          .filterNot(ignoredErrors(_, ingoredErrorPrefixes))
+          .filterNot(_.isEmpty())
+          .toList
+
+        res <-
+          if (success && errors.isEmpty) {
+            val out = messages
+              .collect { case o: StdOut => o.asString }
+              .mkString("")
+              .split("\n")
+              .filterNot(_.isEmpty())
+              .toList
+            debug(
+              namespace,
+              s"Successfully executed in $namespace/$podName/$containerName stdout${formatEvents(out)}"
             )
-          }
-    } yield res
-  }
+          } else
+            F.raiseError {
+              val errorMsg = formatEvents(errors)
+              new RuntimeException(
+                s"Failed to exec into $namespace/$podName/$containerName, status = $maybeStatus, stderr$errorMsg"
+              )
+            }
+      } yield res
+    }
 
-  private def ignoredErrors(error: String): Boolean =
-    error.startsWith("add_principal: Principal or policy already exists")
+  private def ignoredErrors(line: String, ignored: Set[String]): Boolean =    
+    ignored.exists(i => line.startsWith(i))    
 
   def findPod(
       client: KubernetesClient[F]
