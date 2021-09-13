@@ -47,16 +47,6 @@ Alternatively, just clone this repository and run `make install` in root folder 
 Run `make uninstall` to uninstall Kerberos Operator.
 
 
-### Deploy Specific Operator Version
-
-In order to deploy a specific version, clone above manifest files and change the image tag in the `krb-operator2` container. 
-For example:
-
-```diff
--image: alexeyn/kerberos-operator:0.1.1
-+image: alexeyn/kerberos-operator:0.1.1
-```
-
 ## How to uninstall
 
 ```bash

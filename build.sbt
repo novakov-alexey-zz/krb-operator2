@@ -19,8 +19,7 @@ lazy val root = (project in file("."))
       scalaTest % Test
     ),
     dockerBaseImage := "adoptopenjdk/openjdk11:jre-11.0.9_11.1-alpine",
-    Docker / dockerRepository := Some("alexeyn"),
-    dockerExposedPorts := Seq(),
+    Docker / dockerRepository := Some("alexeyn"),    
     Universal / javaOptions ++= Seq(
       "-Dlogback.configurationFile=/opt/conf/logback.xml"
     ),
