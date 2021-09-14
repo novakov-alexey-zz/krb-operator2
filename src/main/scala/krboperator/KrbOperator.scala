@@ -29,26 +29,23 @@ object KrbOperator extends IOApp with Codecs {
 
   override def run(args: List[String]): IO[ExitCode] =
     kubernetesClient
-      .use { client =>
+      .use { implicit client =>
         for {
           operatorCfg <- IO.fromEither(
             AppConfig.load
               .leftMap(e => new RuntimeException(s"failed to load config: $e"))
           )
           serverCtx = crds.context[KrbServer]
-          _ <- createCrdIfAbsent(
-            client,
+          _ <- createCrdIfAbsent[IO, KrbServer](
             serverCtx,
             crds.server.definition(serverCtx)
           )
           principalCtx = crds.context[Principals]
-          _ <- createCrdIfAbsent(
-            client,
+          _ <- createCrdIfAbsent[IO, Principals](
             principalCtx,
             crds.principal.definition(principalCtx)
           )
           _ <- createWatchers(
-            client,
             operatorCfg
           ).parJoinUnbounded.compile.drain
         } yield ()
@@ -56,9 +53,8 @@ object KrbOperator extends IOApp with Codecs {
       .as(ExitCode.Success)
 
   def createWatchers(
-      client: KubernetesClient[IO],
       operatorCfg: KrbOperatorCfg
-  ) = {
+  )(implicit client: KubernetesClient[IO]) = {
     val secrets = new Secrets(client, operatorCfg)
     val kadmin = new Kadmin(client, operatorCfg)
     val template = new Template(client, secrets, operatorCfg)
@@ -84,25 +80,24 @@ object KrbOperator extends IOApp with Codecs {
     Stream(server, principals)
   }
 
-  def createCrdIfAbsent[F[_]: Async, Resource](
-      client: KubernetesClient[F],
+  def createCrdIfAbsent[F[_]: Sync, Resource](
       ctx: CrdContext,
       customDefinition: CustomResourceDefinition,
       attempts: Int = 1
-  ): F[Unit] = {
+  )(implicit client: KubernetesClient[F]): F[Unit] = {
     val crdName = crds.crdName(ctx)
     for {
       found <- client.customResourceDefinitions
         .get(crdName)
         .map(_ => true)
         .recoverWith { case _ =>
-          Async[F].pure(false)
+          false.pure[F]
         }
       _ <-
         if (!found && attempts > 0)
           client.customResourceDefinitions.create(
             customDefinition
-          ) *> createCrdIfAbsent(client, ctx, customDefinition, attempts - 1)
+          ) *> createCrdIfAbsent(ctx, customDefinition, attempts - 1)
         else if (!found)
           Sync[F].raiseError(new RuntimeException(s"CRD '$crdName' not found"))
         else Sync[F].unit
