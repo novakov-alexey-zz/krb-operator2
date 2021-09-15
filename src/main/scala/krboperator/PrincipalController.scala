@@ -251,9 +251,7 @@ class PrincipalController[F[_]: Parallel](
       } yield DownloadStatus(
         remotePath,
         noErrors && successStatus,
-        group.copy(keytab =
-          group.keytab.copy(localPath = Some(localPath))
-        )
+        group.copy(keytab = group.keytab.copy(localPath = Some(localPath)))
       )
     }.sequence
   }
