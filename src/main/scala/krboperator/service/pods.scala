@@ -109,8 +109,8 @@ class Pods[F[_]](implicit F: Async[F], T: Temporal[F])
       } yield res
     }
 
-  private def ignoredErrors(line: String, ignored: Set[String]): Boolean =    
-    ignored.exists(i => line.startsWith(i))    
+  private def ignoredErrors(line: String, ignored: Set[String]): Boolean =
+    ignored.exists(i => line.startsWith(i))
 
   def findPod(
       client: KubernetesClient[F]

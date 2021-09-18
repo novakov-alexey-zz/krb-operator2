@@ -1,7 +1,7 @@
 package krboperator
 
 import cats.effect.Sync
-import cats.syntax.all.catsSyntaxApply
+import cats.syntax.all._
 import com.goyeau.kubernetes.client.crd.CustomResource
 import krboperator.Controller.{NewStatus, NoStatus, noStatus}
 
@@ -11,7 +11,7 @@ object Controller {
   type NewStatus[U] = Option[U]
   type NoStatus = NewStatus[Unit]
 
-  def noStatus[F[_], U](implicit F: Sync[F]): F[Option[U]] = F.pure(None)
+  def noStatus[F[_], U](implicit F: Sync[F]): F[Option[U]] = F.pure(none[U])
 }
 
 abstract class Controller[F[_], T, U](implicit val F: Sync[F]) {

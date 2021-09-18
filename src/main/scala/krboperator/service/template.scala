@@ -205,6 +205,10 @@ class Template[F[_]](
       )
 
       spec = Specs.deployment(deploymentName, realm, cfg)
-      _ <- deployments.createOrReplace(client, spec, meta) //TODO: check deployment status?
+      _ <- deployments.createOrReplace(
+        client,
+        spec,
+        meta
+      ) //TODO: check deployment status?
     } yield ()
 }
