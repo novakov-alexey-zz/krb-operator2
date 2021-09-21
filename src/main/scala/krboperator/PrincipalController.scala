@@ -4,7 +4,6 @@ import cats.Parallel
 import cats.effect.Sync
 import cats.implicits._
 import com.goyeau.kubernetes.client.KubernetesClient
-import com.goyeau.kubernetes.client.api.ExecStream.StdErr
 import com.goyeau.kubernetes.client.api.NamespacedPodsApi.ErrorOrStatus
 import com.goyeau.kubernetes.client.api.ParseFailure
 import com.goyeau.kubernetes.client.crd.CustomResource
@@ -54,6 +53,11 @@ class PrincipalController[F[_]: Parallel](
   override def onDelete(
       resource: CustomResource[Principals, PrincipalsStatus]
   ): F[Unit] = super.onDelete(resource)
+
+  override def reconcile(
+      resource: CustomResource[Principals, PrincipalsStatus]
+  ): F[NewStatus[PrincipalsStatus]] =
+    onApply(resource.spec, resource.metadata)
 
   private def getNamespace(meta: Option[ObjectMeta]): F[(ObjectMeta, String)] =
     for {

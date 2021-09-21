@@ -9,13 +9,14 @@ import fs2.{Pipe, Stream}
 import io.circe.generic.extras.auto._
 import io.circe.{Decoder, Encoder}
 import io.k8s.apiextensionsapiserver.pkg.apis.apiextensions.v1.CustomResourceDefinition
+import krboperator.Controller.NewStatus
 import krboperator.service.Template.implicits._
 import krboperator.service.{Kadmin, Secrets, Template}
-import krboperator.Controller.{NewStatus, noStatus}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.io.File
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.reflect.ClassTag
 
 object KrbOperator extends IOApp with Codecs {
@@ -80,10 +81,40 @@ object KrbOperator extends IOApp with Codecs {
         operatorCfg
       )
 
-    val server = watchCr[IO, KrbServer, KrbServerStatus](serverCtx)
-    val principals = watchCr[IO, Principals, PrincipalsStatus](principalCtx)
-    Stream(server, principals)
+    Stream(
+      watchCr[IO, KrbServer, KrbServerStatus](serverCtx),
+      watchCr[IO, Principals, PrincipalsStatus](principalCtx),
+      reconcile[IO, KrbServer, KrbServerStatus](serverCtx),
+      reconcile[IO, Principals, PrincipalsStatus](principalCtx)
+    )
   }
+
+  def reconcile[F[
+      _
+  ]: Async, Resource: Encoder: Decoder: ClassTag, Status: Encoder: Decoder](
+      ctx: CrdContext,
+      every: FiniteDuration = 30.seconds
+  )(implicit
+      client: KubernetesClient[F],
+      controller: Controller[F, Resource, Status]
+  ): Stream[F, Unit] =
+    Stream
+      .awakeEvery(every)
+      .evalMap { _ =>
+        Logger[F].debug(
+          s"Reconciling events for ${implicitly[ClassTag[Resource]].runtimeClass.getSimpleName}"
+        ) *> client.customResources[Resource, Status](ctx).list()
+      }
+      .through(
+        _.evalMap { crList =>
+          Logger[F].debug(
+            s"Got ${crList.items.length} custom resources"
+          ) *> crList.items
+            .map(cr => controller.reconcile(cr).map(addStatus(_, cr)))
+            .sequence
+        }.flatMap(Stream.emits)
+      )
+      .through(submitStatus[F, Resource, Status](ctx))
 
   def createCrdIfAbsent[F[_]: Sync, Resource](
       ctx: CrdContext,
@@ -153,9 +184,9 @@ object KrbOperator extends IOApp with Codecs {
                 case DELETED =>
                   controller.onDelete(event.`object`).map(_ => none)
                 case ERROR =>
-                  controller
-                    .onError(event.`object`)
-                    .map(addStatus(_, event.`object`))
+                  Logger[F].error(
+                    s"Received error event for ${event.`object`}"
+                  ) *> Sync[F].pure(none)
               }
 
             status.handleErrorWith { e =>
@@ -179,20 +210,21 @@ object KrbOperator extends IOApp with Codecs {
 
   def submitStatus[F[
       _
-  ]: Sync, Resource: Encoder: Decoder, Status: Encoder: Decoder](
+  ], Resource: Encoder: Decoder, Status: Encoder: Decoder](
       ctx: CrdContext
   )(implicit
-      client: KubernetesClient[F]
+      client: KubernetesClient[F],
+      F: Sync[F]
   ): Pipe[F, Option[CustomResource[Resource, Status]], Unit] =
     _.flatMap { cr =>
       val action = cr match {
         case Some(r) =>
           for {
-            name <- Sync[F].fromOption(
+            name <- F.fromOption(
               r.metadata.flatMap(_.name),
               new RuntimeException(s"Resource name is empty: $r")
             )
-            namespace <- Sync[F].fromOption(
+            namespace <- F.fromOption(
               r.metadata.flatMap(_.namespace),
               new RuntimeException(s"Resource namespace is empty: $r")
             )
@@ -201,20 +233,20 @@ object KrbOperator extends IOApp with Codecs {
               .namespace(namespace)
               .updateStatus(name, r)
               .flatMap(status =>
-                if (status.isSuccess) Sync[F].unit
+                if (status.isSuccess) F.unit
                 else
                   Logger[F].error(new RuntimeException(status.toString()))(
                     "Status updated failed on Kubernetes side"
                   )
               )
           } yield ()
-        case None => Sync[F].unit
+        case None => F.unit
       }
 
       Stream.eval(action.handleErrorWith { e =>
         Logger[F].error(e)(
           s"Failed to submit status"
-        ) *> Sync[F].pure(none)
+        ) *> F.pure(none)
       })
     }
 }

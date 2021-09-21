@@ -4,7 +4,7 @@ object Dependencies {
   lazy val scalaTest = "org.scalatest" %% "scalatest" % "3.2.10"
 
   lazy val kubernetesClient =
-    "com.goyeau" %% "kubernetes-client" % "35662a1"
+    "com.goyeau" %% "kubernetes-client" % "0.7.0-3-f162478-SNAPSHOT"
 
   lazy val circeVersion = "0.14.1"
   lazy val circeExtra = "io.circe" %% "circe-generic-extras" % circeVersion

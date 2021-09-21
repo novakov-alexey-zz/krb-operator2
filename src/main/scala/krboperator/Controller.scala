@@ -28,6 +28,4 @@ abstract class Controller[F[_], T, U](implicit val F: Sync[F]) {
   def onError(resource: CustomResource[T, U]): F[NewStatus[U]] = noStatus
 
   def onDelete(resource: CustomResource[T, U]): F[Unit] = F.unit
-
-  def onInit(): F[Unit] = F.unit
 }
