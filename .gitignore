@@ -5,3 +5,4 @@ target/
 .metals
 .vscode
 metals.sbt
+.DS_Store
