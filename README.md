@@ -1,13 +1,13 @@
 # Kerberos Operator 2
 
-New version of Kerberos Operator, but this time completely written in Scala with Cats-Effects.
+It is new version of Kerberos Operator, but this time completely written in Scala with Cats-Effects.
 
 This operator deployes KDC, Kadmin servers and creates principals and their keytabs as Kubernetes secrets.
 Developed using [Kubernetes-Client](https://github.com/joan38/kubernetes-client) Scala library.
 
 ## Operator use cases
 
-Why to use this Operator?
+Why should I use this Operator?
 
 -   Your [SPNEGO](https://en.wikipedia.org/wiki/SPNEGO) authentication requires keytab mounted to a Pod: 
 deploy this operator with required principals to get automatically created secrets with keytabs inside
