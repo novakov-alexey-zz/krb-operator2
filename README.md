@@ -1,5 +1,8 @@
 # Kerberos Operator 2
 
+![](https://github.com/novakov-alexey/krb-operator2/workflows/Scala%20CI/badge.svg?branch=master)
+[![Docker Hub](https://img.shields.io/docker/v/alexeyn/kerberos-operator2?color=blue&label=tag)]()
+
 It is new version of Kerberos Operator, but this time completely written in Scala with Cats-Effects.
 
 This operator deployes KDC, Kadmin servers and creates principals and their keytabs as Kubernetes secrets.
