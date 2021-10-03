@@ -30,7 +30,7 @@ with required list of principals, and their predefined or random passwords
 
 ### Installation Steps
 
-Define namespace as environment variable:
+Define namespac,e which will be used to install Kerberos Operator, as environment variable:
 
 ```bash
 export NAMESPACE=<put desired namespace>
