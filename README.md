@@ -8,6 +8,8 @@ It is new version of Kerberos Operator, but this time completely written in Scal
 This operator deployes KDC, Kadmin servers and creates principals and their keytabs as Kubernetes secrets.
 Developed using [Kubernetes-Client](https://github.com/joan38/kubernetes-client) Scala library.
 
+See arcticle for more details: [https://novakov-alexey.github.io/k8s-operator/](https://novakov-alexey.github.io/k8s-operator/)
+
 ## Operator use cases
 
 Why should I use this Operator?
