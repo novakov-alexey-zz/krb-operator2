@@ -209,6 +209,6 @@ class Template[F[_]](
         client,
         spec,
         meta
-      ) //TODO: check deployment status?
+      ) // TODO: check deployment status?
     } yield ()
 }

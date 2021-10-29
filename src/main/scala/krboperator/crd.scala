@@ -19,7 +19,7 @@ object crds {
       group,
       "v1",
       plural
-    ) //TODO: version to extract to configuration
+    ) // TODO: version to extract to configuration
   }
 
   def plural(resourceName: String): String = s"${resourceName.toLowerCase}s"
