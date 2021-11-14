@@ -31,7 +31,7 @@ lazy val root = (project in file("."))
 
 releaseProcess :=
   Seq[ReleaseStep](
-    // checkSnapshotDependencies,
+    checkSnapshotDependencies,
     inquireVersions,
     setReleaseVersion,
     releaseStepCommandAndRemaining("docker:publish"),
