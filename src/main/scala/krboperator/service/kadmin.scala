@@ -172,7 +172,7 @@ class Kadmin[F[_]](client: KubernetesClient[F], cfg: KrbOperatorCfg)(implicit
     } yield ()).adaptError { case e =>
       new RuntimeException(
         s"Failed to execute command in ${context.meta.namespace
-          .getOrElse("unknown_namespace")}/$podName pod",
+            .getOrElse("unknown_namespace")}/$podName pod",
         e
       )
     }
