@@ -3,7 +3,7 @@ import com.typesafe.sbt.SbtNativePackager.autoImport.NativePackagerHelper._
 import sbtrelease.ReleaseStateTransformations._
 
 Global / onChangedBuildSource := ReloadOnSourceChanges
-ThisBuild / scalaVersion := "2.13.8"
+ThisBuild / scalaVersion := "2.13.10"
 ThisBuild / organization := "io.github.novakov-alexey"
 
 lazy val root = (project in file("."))
